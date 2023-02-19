@@ -101,19 +101,16 @@ fn encode6bit(e1:u8) -> char{
     let mut e = e1;
     if e<10 {
         return char::from_u32( (e + 48) as u32).unwrap();
-        //String.fromCharCode(48+e)  
     }
     else{
         e -= 10;
         if e <26{
-            //String.fromCharCode(65+e)
             return char::from_u32((65+e) as u32).unwrap();
         } 
         else{
             e -= 26;
             if e < 26{
                 return char::from_u32((97+e) as u32).unwrap();
-                //String.fromCharCode(97+e)
             }
             else{
                 e -= 26;
@@ -147,6 +144,6 @@ pub fn download_puml(puml_str: &str, png_save_path_name:&str) -> bool
     let compressed = deflate_bytes(puml_str.as_bytes());
     let encode64_str = encode64_(&compressed);
     let url = "http://www.plantuml.com/plantuml/png/".to_string() + &encode64_str;
-    println!("{}",url);
+  
     save_png(&url, png_save_path_name)
 }

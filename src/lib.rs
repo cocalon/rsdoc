@@ -109,7 +109,7 @@ pub fn image(img:proc_macro::TokenStream) -> proc_macro::TokenStream {
     let prefix = path.parent().unwrap();
     std::fs::create_dir_all(prefix).unwrap();
 
-    // 拷贝文件
+    // copy file
     if let Err( es ) = fs::copy(&img, path_s)
     {
         println!("{:?}", es);
@@ -135,9 +135,6 @@ pub fn plantuml_file(img:proc_macro::TokenStream) -> proc_macro::TokenStream {
         let ret = fs::read_to_string(&img);
         if let Ok(data) = ret{
             let output = save_plantuml(&data);
-        
-            //text_proc.finalize()?;
-            //println!("Out: {}", output);
             Ok(LitStr::new(&output, Span::call_site())
                 .into_token_stream()
                 .into())
@@ -158,8 +155,8 @@ fn save_plantuml(uml_str:&str) -> String{
     hasher.input_str(&uml_str);
     
 
-     let uml_file_name = &("./target/doc/images/puml_files/".to_string() + hasher.result_str().as_str() + ".png");
-    // println!("{}",uml_file_name);
+    let uml_file_name = &("./target/doc/images/puml_files/".to_string() + hasher.result_str().as_str() + ".png");
+    
 
     if true == save_http_png::download_puml(&uml_str, uml_file_name)
     {
@@ -234,8 +231,6 @@ pub fn plantuml(tokens: proc_macro::TokenStream) -> proc_macro::TokenStream {
 
         let output = save_plantuml(&uml_str);
         
-        //text_proc.finalize()?;
-        //println!("Out: {}", output);
         Ok(LitStr::new(&output, Span::call_site())
             .into_token_stream()
             .into())
