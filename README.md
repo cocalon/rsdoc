@@ -40,15 +40,22 @@ Or you can directly attach the puml file stored as a file
     
     #[doc = rsdoc::plantuml_file!(test.puml)]
 
+If your file is placed in a folder under the project directory, you can input the relative path directly like that.
+
+    #[doc = rsdoc::plantuml_file!(pumls/test.puml)]
+
+### `image!`
 If you want to attach pictures, such as PNG or SVG, you can do it this way   
 
     #[doc = rsdoc::image!(test.png)]
 
-### `image!`
 And you can also use it with the Drawio tool, hope you like it!
 
     #[doc = rsdoc::image!(test.drawio.svg)]
 
+If your file is placed in a folder under the project directory, you can input the relative path directly like that.
+
+    #[doc = rsdoc::image!(images/test.drawio.svg)]
 
 See the `example` directory for a complete example.
 
