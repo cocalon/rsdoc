@@ -1,7 +1,5 @@
 # rsdoc
 
-[<img src="https://docs.rs/svgbobdoc/badge.svg" alt="docs.rs">](https://docs.rs/svgbobdoc/)
-
 This crate provides a procedural macro that transform
 PlandUML and Drawio diagrams in doc comments as PNG or SVG images.
 The diagrams in doc comments as SVG images using [`drawio`].
@@ -21,7 +19,7 @@ Add the following line to `Cargo.toml`.
 
 ```toml
 [dependencies]
-svgbobdoc = { version = "0.2", features = ["enable"] }
+rsdoc = "0.1.0"
 ```
 
 ### `plantuml!`

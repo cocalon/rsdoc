@@ -99,7 +99,8 @@ impl Parse for StrOrDocAttrs {
 }
 
 
-
+///Attach pictures, such as PNG or SVG, you can do it this way 
+/// #[doc = rsdoc::image!(test.png)]
 #[proc_macro]
 pub fn image(img:proc_macro::TokenStream) -> proc_macro::TokenStream {
     let img = img.to_string().replace(" / ", "/");
@@ -123,6 +124,8 @@ pub fn image(img:proc_macro::TokenStream) -> proc_macro::TokenStream {
     })
 }
 
+/// Directly attach the puml file stored as a file
+/// #[doc = rsdoc::plantuml_file!(test.puml)]
 #[proc_macro]
 pub fn plantuml_file(img:proc_macro::TokenStream) -> proc_macro::TokenStream {
     let img = img.to_string().replace(" / ", "/");
@@ -188,10 +191,7 @@ fn save_plantuml(uml_str:&str) -> String{
     }
     output
 }
-/// Render ASCII-diagram code blocks in a Markdown-formatted string literal or
-/// zero or more `#[doc = ...]` attributes as SVG images.
-///
-/// See [the module-level documentation](../index.html) for more.
+/// Render code blocks in a PlantUML string 
 #[proc_macro]
 pub fn plantuml(tokens: proc_macro::TokenStream) -> proc_macro::TokenStream {
     let input: StrOrDocAttrs = parse_macro_input!(tokens);
