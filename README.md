@@ -57,8 +57,6 @@ If your file is placed in a folder under the project directory, you can input th
 
     #[doc = rsdoc::image!(images/test.drawio.svg)]
 
-See the `example` directory for a complete example.
-
 ### Tips
 
  - Using this macro increases the compilation time. The `enable` Cargo feature can be used to turn off the transformation and the compilation of most dependent packages.
