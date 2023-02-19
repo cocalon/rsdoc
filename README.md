@@ -9,7 +9,7 @@ The UML diagrams and flow diagrams in doc comments as PNG images using [`plantUM
 
 [`drawio`]: https://drawio-app.com/
 [`plantuml`]: https://www.plantuml.com/
-
+          https://raw.githubusercontent.com/cocalon/rsdoc/main/rsdoc_example.png
 <img src="https://raw.githubusercontent.com/cocalon/rsdoc/main/rsdoc_example.png"
    style="border: 10px solid rgba(192, 192, 192, 0.15)">
 
@@ -35,6 +35,7 @@ In this way, you can directly use the Alt+D key to browse the UML diagram in the
     )]
     pub fn test_function(){}
 
+### `plantuml_file!`
 Or you can directly attach the puml file stored as a file
     
     #[doc = rsdoc::plantuml_file!(test.puml)]
@@ -43,6 +44,7 @@ If you want to attach pictures, such as PNG or SVG, you can do it this way
 
     #[doc = rsdoc::image!(test.png)]
 
+### `image!`
 And you can also use it with the Drawio tool, hope you like it!
 
     #[doc = rsdoc::image!(test.drawio.svg)]
