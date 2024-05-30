@@ -162,7 +162,6 @@ fn save_plantuml(uml_str:&str) -> String{
     let svg = download_puml_svg(&uml_str);
 
     if svg.len() > 0 {
-        println!("svg response {}", svg);
         output.push_str(&("</p><div>".to_string() + svg.as_str() + "</div>"));
     }
     else if true == save_http_png::download_puml(&uml_str, uml_file_name)
