@@ -255,7 +255,6 @@ fn download_puml_svg(puml_str: &str) -> String
     let compressed = deflate_bytes(puml_str.as_bytes());
     let encode64_str = save_http_png::encode64_(&compressed);
     let url = "http://www.plantuml.com/plantuml/svg/".to_string() + &encode64_str;
-    println!("plantuml url -> {}", url);
   
     let agent = ureq::AgentBuilder::new()
     .timeout_read(Duration::from_secs(5))
