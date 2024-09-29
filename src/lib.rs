@@ -1,5 +1,6 @@
 #![doc = include_str!("../README.md")]
 #![warn(rust_2018_idioms)]
+use deflate::deflate_bytes;
 use proc_macro2::{Span, TokenStream};
 use quote::{quote, ToTokens};
 use syn::{
@@ -7,7 +8,7 @@ use syn::{
     parse::{Parse, ParseStream},
     parse_macro_input, AttrStyle, Attribute, Error, Lit, LitStr, Meta, MetaNameValue, Result,
 };
-use std::fs;
+use std::{fs, time::Duration};
 
 mod save_http_png;
 
@@ -158,7 +159,12 @@ fn save_plantuml(uml_str:&str) -> String{
     let uml_file_name = &("./target/doc/images/puml_files/".to_string() + hasher.result_str().as_str() + ".png");
     
 
-    if true == save_http_png::download_puml(&uml_str, uml_file_name)
+    let svg = download_puml_svg(&uml_str);
+
+    if svg.len() > 0 {
+        output.push_str(&("</p><div>".to_string() + svg.as_str() + "</div>"));
+    }
+    else if true == save_http_png::download_puml(&uml_str, uml_file_name)
     {
         output.push_str(&("</p><img src = \"".to_string() + "../images/puml_files/" + hasher.result_str().as_str() + ".png" + "\" />\n"));
     }
@@ -242,4 +248,27 @@ fn handle_error(cb: impl FnOnce() -> Result<proc_macro::TokenStream>) -> proc_ma
         Ok(tokens) => tokens,
         Err(e) => e.to_compile_error().into(),
     }
+}
+
+fn download_puml_svg(puml_str: &str) -> String
+{
+    let compressed = deflate_bytes(puml_str.as_bytes());
+    let encode64_str = save_http_png::encode64_(&compressed);
+    let url = "http://www.plantuml.com/plantuml/svg/".to_string() + &encode64_str;
+  
+    let agent = ureq::AgentBuilder::new()
+    .timeout_read(Duration::from_secs(5))
+    .timeout_write(Duration::from_secs(5))
+    .build();
+
+    let ret = match agent.get(&url).call() {
+        Ok(response) => response.into_string(),
+        Err(_) => return String::default(),
+    };
+
+    match ret {
+        Ok(s) => return s,
+        Err(_) => return String::default()
+    }
+
 }

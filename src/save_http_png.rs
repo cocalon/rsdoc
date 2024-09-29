@@ -63,7 +63,7 @@ fn save_png(url:&str, output_filename:&str) -> bool{
     return true;
 }
 
-fn encode64_(e:&[u8]) -> String{
+pub fn encode64_(e:&[u8]) -> String{
     let mut r = String::new();
 
     for i in (0..e.len()).step_by(3)
