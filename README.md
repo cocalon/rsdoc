@@ -9,7 +9,7 @@ The UML diagrams and flow diagrams in doc comments as PNG images using [`plantUM
 
 [`drawio`]: https://drawio-app.com/
 [`plantuml`]: https://www.plantuml.com/
-          https://raw.githubusercontent.com/cocalon/rsdoc/main/rsdoc_example.png
+          <https://raw.githubusercontent.com/cocalon/rsdoc/main/rsdoc_example.png>
 <img src="https://raw.githubusercontent.com/cocalon/rsdoc/main/rsdoc_example.png"
    style="border: 10px solid rgba(192, 192, 192, 0.15)">
 
