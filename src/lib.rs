@@ -98,11 +98,25 @@ impl Parse for StrOrDocAttrs {
     }
 }
 
+/// Resolve a macro argument into a filesystem path.
+///
+/// Accepts both a string literal (`"diagrams/flow.mmd"`) and the historical
+/// bare form (`diagrams/flow.mmd`). The bare form arrives as separate tokens,
+/// so the ` / ` separator that `TokenStream::to_string` inserts has to be glued
+/// back together.
+fn arg_to_path(tokens: proc_macro::TokenStream) -> String {
+    if let Ok(lit) = syn::parse::<LitStr>(tokens.clone()) {
+        return lit.value();
+    }
+
+    tokens.to_string().replace(" / ", "/")
+}
+
 ///Attach pictures, such as PNG or SVG, you can do it this way
 /// #[doc = rsdoc::image!(test.png)]
 #[proc_macro]
 pub fn image(img: proc_macro::TokenStream) -> proc_macro::TokenStream {
-    let img = img.to_string().replace(" / ", "/");
+    let img = arg_to_path(img);
     let path_s = "./target/doc/images/".to_string() + &img;
     let path = std::path::Path::new(path_s.as_str());
     let prefix = path.parent().unwrap();
@@ -128,7 +142,7 @@ pub fn image(img: proc_macro::TokenStream) -> proc_macro::TokenStream {
 /// #[doc = rsdoc::plantuml_file!(test.puml)]
 #[proc_macro]
 pub fn plantuml_file(img: proc_macro::TokenStream) -> proc_macro::TokenStream {
-    let img = img.to_string().replace(" / ", "/");
+    let img = arg_to_path(img);
 
     handle_error(|| {
         let ret = fs::read_to_string(&img);
@@ -194,10 +208,9 @@ fn save_plantuml(uml_str: &str) -> String {
     }
     output
 }
-/// Render code blocks in a PlantUML string
-#[proc_macro]
-pub fn plantuml(tokens: proc_macro::TokenStream) -> proc_macro::TokenStream {
-    let input: StrOrDocAttrs = parse_macro_input!(tokens);
+/// Flatten a string literal or a sequence of `#[doc = ...]` attributes into a
+/// single source string. Shared by the PlantUML and Mermaid entry points.
+fn collect_source(input: StrOrDocAttrs) -> Result<String> {
     let (mut iter1, mut iter2);
     let iter: &mut dyn Iterator<Item = Result<LitStr>> = match input {
         StrOrDocAttrs::Str(s) => {
@@ -226,14 +239,20 @@ pub fn plantuml(tokens: proc_macro::TokenStream) -> proc_macro::TokenStream {
         }
     };
 
-    handle_error(|| {
-        let mut uml_str = String::new();
-        for lit_str in iter {
-            let lit_str = lit_str?;
-            let st = lit_str.value();
-            uml_str.push_str((st + "\n").as_str());
-        }
+    let mut out = String::new();
+    for lit_str in iter {
+        out.push_str(&(lit_str?.value() + "\n"));
+    }
+    Ok(out)
+}
 
+/// Render code blocks in a PlantUML string
+#[proc_macro]
+pub fn plantuml(tokens: proc_macro::TokenStream) -> proc_macro::TokenStream {
+    let input: StrOrDocAttrs = parse_macro_input!(tokens);
+
+    handle_error(|| {
+        let uml_str = collect_source(input)?;
         let output = save_plantuml(&uml_str);
 
         Ok(LitStr::new(&output, Span::call_site())
@@ -265,4 +284,168 @@ fn download_puml_svg(puml_str: &str) -> String {
     };
 
     ret.unwrap_or_default()
+}
+
+// ---------------------------------------------------------------------------
+// Mermaid
+//
+// Mermaid has no server-side renderer comparable to plantuml.com, and shipping
+// a JS runtime in a proc-macro is not an option. Instead the diagram source is
+// emitted as a `<pre class="mermaid">` block and the diagram is drawn by the
+// browser. The mermaid.js bundle below is embedded into the crate and copied
+// into `target/doc/` at build time, so the generated documentation renders with
+// no network access at all.
+// ---------------------------------------------------------------------------
+
+/// Bundled mermaid.js UMD build (v11). `include_bytes!` keeps it inside the
+/// proc-macro binary; it is written to `target/doc/` on demand.
+const MERMAID_JS: &[u8] = include_bytes!("../assets/mermaid.min.js");
+
+/// Copy the bundled mermaid.js into `target/doc/` when it is missing or stale.
+fn ensure_mermaid_asset() {
+    let doc_dir = std::path::Path::new("./target/doc");
+    if let Err(e) = fs::create_dir_all(doc_dir) {
+        println!(
+            "warning: rsdoc could not create {}: {}",
+            doc_dir.display(),
+            e
+        );
+        return;
+    }
+
+    let dest = doc_dir.join("mermaid.min.js");
+
+    // Writing 3.4 MiB on every macro invocation would be wasteful; an intact
+    // copy of the same length is good enough to skip the work.
+    if let Ok(meta) = fs::metadata(&dest) {
+        if meta.len() == MERMAID_JS.len() as u64 {
+            return;
+        }
+    }
+
+    if let Err(e) = fs::write(&dest, MERMAID_JS) {
+        println!("warning: rsdoc could not write {}: {}", dest.display(), e);
+    }
+}
+
+/// Escape the characters that HTML would otherwise treat as markup. The browser
+/// hands the *text* content of the `<pre>` to mermaid, so this round-trips back
+/// to the original source.
+fn html_escape(input: &str) -> String {
+    let mut out = String::with_capacity(input.len());
+    for ch in input.chars() {
+        match ch {
+            '&' => out.push_str("&amp;"),
+            '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
+            _ => out.push(ch),
+        }
+    }
+    out
+}
+
+/// Loader injected next to every diagram.
+///
+/// The path to `mermaid.min.js` is derived from rustdoc's own `static.files`
+/// reference rather than hard-coded, so diagrams keep working no matter how deep
+/// the page sits (`fn.x.html`, `mod/fn.x.html`, …). Mermaid is then started
+/// manually once the loader has finished, which avoids depending on when
+/// `initialize` happens to run relative to the load event.
+const MERMAID_LOADER: &str = r#"<script>
+(function () {
+  if (window.__rsdoc_mermaid_ready) { return; }
+  window.__rsdoc_mermaid_ready = true;
+
+  var refs = document.querySelectorAll('link[href*="static.files"], script[src*="static.files"]');
+  var root = "";
+  for (var i = 0; i < refs.length; i++) {
+    var u = refs[i].getAttribute("href") || refs[i].getAttribute("src") || "";
+    var at = u.indexOf("static.files");
+    if (at > 0) { root = u.slice(0, at); break; }
+  }
+
+  function boot() {
+    var theme = localStorage.getItem("rustdoc-theme");
+    var dark = (theme === "dark" || theme === "ayu");
+    window.mermaid.initialize({ startOnLoad: false, theme: dark ? "dark" : "default" });
+    window.mermaid.run();
+  }
+
+  var s = document.createElement("script");
+  s.src = root + "mermaid.min.js";
+  s.onload = function () {
+    if (document.readyState === "loading") {
+      document.addEventListener("DOMContentLoaded", boot);
+    } else {
+      boot();
+    }
+  };
+  s.onerror = function () {
+    console.error("rsdoc: could not load " + s.src);
+  };
+  document.head.appendChild(s);
+})();
+</script>
+"#;
+
+fn save_mermaid(mermaid_str: &str) -> String {
+    ensure_mermaid_asset();
+
+    let mut output = String::new();
+    output.push_str("<pre class=\"mermaid\">\n");
+    output.push_str(&html_escape(mermaid_str));
+    output.push_str("\n</pre>\n");
+    output.push_str(MERMAID_LOADER);
+    output
+}
+
+/// Render Mermaid diagrams in doc comments.
+///
+/// The bundled mermaid.js is copied to `target/doc/mermaid.min.js`, so the
+/// resulting documentation needs no network access.
+///
+/// ```ignore
+/// #[doc = rsdoc::mermaid!(
+/// /// graph TD
+/// ///   A[Start] --> B[Done]
+/// )]
+/// pub fn example() {}
+/// ```
+#[proc_macro]
+pub fn mermaid(tokens: proc_macro::TokenStream) -> proc_macro::TokenStream {
+    let input: StrOrDocAttrs = parse_macro_input!(tokens);
+
+    handle_error(|| {
+        let mermaid_str = collect_source(input)?;
+        let output = save_mermaid(&mermaid_str);
+
+        Ok(LitStr::new(&output, Span::call_site())
+            .into_token_stream()
+            .into())
+    })
+}
+
+/// Attach a Mermaid diagram stored in a `.mmd` file.
+///
+/// ```ignore
+/// #[doc = rsdoc::mermaid_file!("diagrams/flow.mmd")]
+/// pub fn example() {}
+/// ```
+#[proc_macro]
+pub fn mermaid_file(path: proc_macro::TokenStream) -> proc_macro::TokenStream {
+    let path = arg_to_path(path);
+
+    handle_error(|| {
+        let output = match fs::read_to_string(&path) {
+            Ok(data) => save_mermaid(&data),
+            Err(e) => {
+                println!("warning: rsdoc could not read {}: {}", path, e);
+                String::new()
+            }
+        };
+
+        Ok(LitStr::new(&output, Span::call_site())
+            .into_token_stream()
+            .into())
+    })
 }

@@ -1,12 +1,17 @@
 # rsdoc
 
-This crate provides a procedural macro that transform
-PlantUML and Drawio diagrams in doc comments as PNG or SVG images.
-The diagrams in doc comments as SVG images using [`drawio`].
-The UML diagrams and flow diagrams in doc comments as PNG images using [`plantUML`].
+This crate provides procedural macros that turn diagrams written in doc comments
+into images inside your rustdoc output.
+
+- **[Mermaid]**: drawn by the browser from a bundled `mermaid.js`. Fully offline,
+  no CDN and no server round-trip.
+- **[`plantuml`]**: rendered as SVG (falling back to PNG) through `plantuml.com`.
+- **[`drawio`] or any image**: copied into the output directory and referenced from
+  the generated page.
 
 *Requires Rust version 1.54 or later or equivalent nightly builds.*
 
+[Mermaid]: https://mermaid.js.org/
 [`drawio`]: https://drawio-app.com/
 [`plantuml`]: https://www.plantuml.com/
           <https://raw.githubusercontent.com/cocalon/rsdoc/main/rsdoc_example.png>
@@ -19,8 +24,30 @@ Add the following line to `Cargo.toml`.
 
 ```toml
 [dependencies]
-rsdoc = "0.3.1"
+rsdoc = "0.4.0"
 ```
+
+### `mermaid!`
+
+Render a [Mermaid] diagram. Write the source inline as doc comments:
+
+    #[doc = rsdoc::mermaid!(
+    /// graph TD
+    ///   A[Start] --> B{Done?}
+    ///   B -->|yes| C[Ship it]
+    ///   B -->|no| D[Fix]
+    )]
+    pub fn test_function(){}
+
+Or keep large diagrams in their own `.mmd` file:
+
+    #[doc = rsdoc::mermaid_file!("diagrams/flow.mmd")]
+
+The diagram is emitted as a `<pre class="mermaid">` block and drawn by the
+browser. `mermaid.js` (v11) ships with this crate and is copied to
+`target/doc/mermaid.min.js` during the build, so the generated documentation
+renders **without any network access** — no CDN, no server request, works on an
+air-gapped machine. The theme follows rustdoc's light/dark setting.
 
 ### `plantuml!`
 
@@ -34,6 +61,9 @@ In this way, you can directly use the Alt+D key to browse the UML diagram in the
     /// @enduml
     )]
     pub fn test_function(){}
+
+PlantUML diagrams are rendered by requesting `plantuml.com`, so this macro does
+need network access at build time.
 
 ### `plantuml_file!`
 Or you can directly attach the puml file stored as a file
@@ -59,6 +89,10 @@ If your file is placed in a folder under the project directory, you can input th
 
 ### Tips
 
- - Using this macro increases the compilation time. The `enable` Cargo feature can be used to turn off the transformation and the compilation of most dependent packages.
+ - Using these macros increases the compilation time. The `enable` Cargo feature of the
+   `svgbobdoc`-style wrappers does not apply here; wrap a call in `#[cfg_attr(doc, ...)]`
+   if you want documentation-only diagrams.
+ - The bundled `mermaid.js` adds roughly 3.4 MiB to the crate. It is written to
+   `target/doc/` once per build tree, not embedded into every page.
 
-License: MIT/Apache-2.0
+License: MIT OR Apache-2.0

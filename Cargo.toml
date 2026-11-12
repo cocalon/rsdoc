@@ -1,13 +1,13 @@
 [package]
 name = "rsdoc"
-version = "0.3.1"
+version = "0.4.0"
 authors = ["cocalon <cocalon@163.com>"]
 edition = "2021"
 license = "MIT OR Apache-2.0"
 readme = "README.md"
 repository = "https://github.com/cocalon/rsdoc"
-description = "Transform PlantUML/Drawio diagrams in doc comments as PNG or SVG images."
-keywords = ["rustdoc", "documentation", "plantuml", "uml", "drawio"]
+description = "Embed Mermaid, PlantUML and Drawio diagrams in doc comments as PNG or SVG images."
+keywords = ["rustdoc", "documentation", "mermaid", "plantuml", "drawio"]
 categories = ["development-tools"]
 
 [badges]
