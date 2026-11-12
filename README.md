@@ -89,10 +89,34 @@ If your file is placed in a folder under the project directory, you can input th
 
 ### Tips
 
- - Using these macros increases the compilation time. The `enable` Cargo feature of the
-   `svgbobdoc`-style wrappers does not apply here; wrap a call in `#[cfg_attr(doc, ...)]`
-   if you want documentation-only diagrams.
+ - Using these macros increases the compilation time. Wrap a call in
+   `#[cfg_attr(doc, ...)]` if you only want the diagram in documentation builds.
  - The bundled `mermaid.js` adds roughly 3.4 MiB to the crate. It is written to
-   `target/doc/` once per build tree, not embedded into every page.
+   the documentation root once per build tree, not embedded into every page.
+
+### How asset paths are resolved
+
+rsdoc deliberately does **not** hard-code a relative prefix such as
+`../../images/`. The depth of a rustdoc page depends on where the item sits in
+the module tree:
+
+| page | path back to the doc root |
+| --- | --- |
+| `crate/fn.x.html` | `../` |
+| `crate/mod/fn.x.html` | `../../` |
+| `crate/a/b/fn.x.html` | `../../../` |
+
+Any single fixed value is therefore wrong for some pages. Instead, every
+generated element carries a `data-rsdoc-src` attribute and a small bootstrap
+script fills in the real `src` at load time. The root it prepends is derived from
+rustdoc's own asset reference, which rustdoc already computes correctly per page:
+
+1. `static.files/` — rustdoc 1.65 and later
+2. `rustdoc.css` at the doc root — older releases
+3. the `Source` link, which always points at `<root>/src/…`
+
+The output directory itself is located from `CARGO_TARGET_DIR`, or by walking
+upwards from `CARGO_MANIFEST_DIR` until a `target/` directory appears, so
+workspaces and custom target directories work too.
 
 License: MIT OR Apache-2.0
