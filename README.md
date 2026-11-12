@@ -115,6 +115,11 @@ rustdoc's own asset reference, which rustdoc already computes correctly per page
 2. `rustdoc.css` at the doc root — older releases
 3. the `Source` link, which always points at `<root>/src/…`
 
+If none of them can be found — for instance if a future rustdoc switches to
+absolute asset URLs — the bootstrap falls back to probing `../`, `../../`,
+`../../../` and `./` until one resolves. A working anchor costs exactly one
+request, so probing only fires when the page structure has really changed.
+
 The output directory itself is located from `CARGO_TARGET_DIR`, or by walking
 upwards from `CARGO_MANIFEST_DIR` until a `target/` directory appears, so
 workspaces and custom target directories work too.

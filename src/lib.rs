@@ -160,6 +160,11 @@ fn doc_dir() -> std::path::PathBuf {
 ///   1. `static.files/` — rustdoc >= 1.65 puts its CSS/JS there
 ///   2. `rustdoc.css` at the doc root — older releases
 ///   3. the `Source` link, which always points at `<root>/src/…`
+///
+/// If every anchor misses (say a future rustdoc switches to absolute asset URLs)
+/// the detected root is empty and the loader falls back to probing `../`,
+/// `../../` and `../../../` in turn. A working anchor costs exactly one request,
+/// so the probing only ever fires in the broken case.
 const ASSET_BOOTSTRAP: &str = r#"<script>
 (function () {
   if (window.__rsdocBooted) { return; }
@@ -179,7 +184,7 @@ const ASSET_BOOTSTRAP: &str = r#"<script>
     if (css) {
       var h = css.getAttribute("href") || "";
       var slash = h.lastIndexOf("/");
-      return slash >= 0 ? h.slice(0, slash + 1) : "";
+      if (slash >= 0) { return h.slice(0, slash + 1); }
     }
 
     var src = document.querySelector('a.src[href*="/src/"]');
@@ -192,31 +197,68 @@ const ASSET_BOOTSTRAP: &str = r#"<script>
     return "";
   }
 
-  function bootMermaid(root) {
+  // Candidate prefixes, best guess first, then the common depths as a net.
+  function prefixesFor(root) {
+    var list = [];
+    if (root) { list.push(root); }
+    var fallbacks = ["../", "../../", "../../../", "./"];
+    for (var i = 0; i < fallbacks.length; i++) {
+      if (list.indexOf(fallbacks[i]) < 0) { list.push(fallbacks[i]); }
+    }
+    return list;
+  }
+
+  var prefixes = prefixesFor(detectRoot());
+
+  function loadMermaid() {
     var theme = localStorage.getItem("rustdoc-theme");
     var dark = (theme === "dark" || theme === "ayu");
-    var s = document.createElement("script");
-    s.src = root + "mermaid.min.js";
-    s.onload = function () {
-      window.mermaid.initialize({ startOnLoad: false, theme: dark ? "dark" : "default" });
-      window.mermaid.run();
-    };
-    s.onerror = function () { console.error("rsdoc: could not load " + s.src); };
-    document.head.appendChild(s);
+    var i = 0;
+
+    function attempt() {
+      if (i >= prefixes.length) {
+        console.error("rsdoc: mermaid.min.js not found from " + location.pathname);
+        return;
+      }
+      var s = document.createElement("script");
+      s.src = prefixes[i++] + "mermaid.min.js";
+      s.onload = function () {
+        window.mermaid.initialize({ startOnLoad: false, theme: dark ? "dark" : "default" });
+        window.mermaid.run();
+      };
+      s.onerror = attempt;
+      document.head.appendChild(s);
+    }
+
+    attempt();
+  }
+
+  function bindImage(el) {
+    var rel = el.getAttribute("data-rsdoc-src");
+    var i = 0;
+
+    function attempt() {
+      if (i >= prefixes.length) { return; }
+      el.src = prefixes[i++] + rel;
+    }
+
+    el.onerror = attempt;
+    attempt();
   }
 
   function resolve() {
-    var root = detectRoot();
+    var imgs = document.querySelectorAll("img[data-rsdoc-src]");
+    for (var i = 0; i < imgs.length; i++) { bindImage(imgs[i]); }
 
-    var nodes = document.querySelectorAll("[data-rsdoc-src]");
-    for (var i = 0; i < nodes.length; i++) {
-      var el = nodes[i];
-      var abs = root + el.getAttribute("data-rsdoc-src");
-      if (el.tagName === "IMG") { el.src = abs; }
-      else { el.setAttribute("href", abs); }
+    var links = document.querySelectorAll("[data-rsdoc-src]:not(img)");
+    for (var j = 0; j < links.length; j++) {
+      links[j].setAttribute(
+        "href",
+        prefixes[0] + links[j].getAttribute("data-rsdoc-src")
+      );
     }
 
-    if (document.querySelector("pre.mermaid")) { bootMermaid(root); }
+    if (document.querySelector("pre.mermaid")) { loadMermaid(); }
   }
 
   if (document.readyState === "loading") {
