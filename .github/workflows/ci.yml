@@ -38,6 +38,17 @@ jobs:
       - name: Build documentation
         run: cargo doc --no-deps
 
+      - name: Verify generated markup
+        # These assertions cover the behaviour that used to be checked by hand:
+        # the mermaid block survives markdown parsing and the image reference
+        # goes through the data-rsdoc-src bootstrap.
+        run: |
+          cargo doc --example mermaid --example images --no-deps
+          test -f target/doc/mermaid.min.js
+          grep -q 'class="mermaid"' target/doc/mermaid/fn.attribute_style.html
+          grep -q 'data-rsdoc-src' target/doc/images/fn.png.html
+          echo "generated docs contain the expected markup"
+
   examples:
     name: examples
     runs-on: ubuntu-latest

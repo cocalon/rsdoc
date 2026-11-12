@@ -270,27 +270,38 @@ const ASSET_BOOTSTRAP: &str = r#"<script>
 </script>
 "#;
 
+/// Copy `img` into the documentation's `images/` directory and return the markup
+/// that references it. Shared by `image!` and by the `image` / `drawio` fences of
+/// the `diagram` attribute.
+fn save_image(img: &str) -> String {
+    let dest = doc_dir().join("images").join(img);
+
+    if let Some(prefix) = dest.parent() {
+        let _ = fs::create_dir_all(prefix);
+    }
+
+    if let Err(e) = fs::copy(img, &dest) {
+        println!(
+            "warning: rsdoc could not copy `{img}` into the documentation: {e}\n\
+             note: image paths are resolved relative to {}, not to the source file",
+            std::env::var("CARGO_MANIFEST_DIR").unwrap_or_else(|_| ".".to_string())
+        );
+    }
+
+    // The blank line matters: without it markdown treats the <img> and the
+    // <script> as one HTML block, which then ends at the first blank line
+    // inside the script — leaving the rest of the JS to be parsed as prose.
+    format!("<p><img data-rsdoc-src=\"images/{img}\" alt=\"{img}\"/></p>\n\n{ASSET_BOOTSTRAP}")
+}
+
 ///Attach pictures, such as PNG or SVG, you can do it this way
 /// #[doc = rsdoc::image!(test.png)]
 #[proc_macro]
 pub fn image(img: proc_macro::TokenStream) -> proc_macro::TokenStream {
     let img = arg_to_path(img);
-    let path_s = doc_dir().join("images").join(&img);
-    let prefix = path_s.parent().unwrap();
-    std::fs::create_dir_all(prefix).unwrap();
-
-    // copy file
-    if let Err(es) = fs::copy(&img, path_s) {
-        println!("{es:?}");
-    }
 
     handle_error(|| {
-        // The blank line matters: without it markdown treats the <img> and the
-        // <script> as one HTML block, which then ends at the first blank line
-        // inside the script — leaving the rest of the JS to be parsed as prose.
-        let output = format!(
-            "<p><img data-rsdoc-src=\"images/{img}\" alt=\"{img}\"/></p>\n\n{ASSET_BOOTSTRAP}"
-        );
+        let output = save_image(&img);
 
         Ok(LitStr::new(&output, Span::call_site())
             .into_token_stream()
@@ -362,7 +373,7 @@ fn find_plantuml_jar() -> Option<std::path::PathBuf> {
 
 /// Render through a local `plantuml.jar` using its `-pipe` mode, which reads the
 /// source from stdin and writes SVG to stdout — no temporary files involved.
-fn render_with_jar(jar: &std::path::Path, uml_str: &str) -> Option<String> {
+fn render_with_jar(jar: &std::path::Path, uml_str: &str) -> std::result::Result<String, String> {
     use std::io::Write;
     use std::process::{Command, Stdio};
 
@@ -375,23 +386,42 @@ fn render_with_jar(jar: &std::path::Path, uml_str: &str) -> Option<String> {
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
         .spawn()
-        .ok()?;
+        .map_err(|e| {
+            if e.kind() == std::io::ErrorKind::NotFound {
+                "`java` was not found on PATH; install a JRE or remove the jar".to_string()
+            } else {
+                format!("could not start java: {e}")
+            }
+        })?;
 
     {
-        let mut stdin = child.stdin.take()?;
-        stdin.write_all(uml_str.as_bytes()).ok()?;
+        let mut stdin = child
+            .stdin
+            .take()
+            .ok_or_else(|| "could not open plantuml's stdin".to_string())?;
+        stdin
+            .write_all(uml_str.as_bytes())
+            .map_err(|e| format!("could not write the diagram to plantuml: {e}"))?;
     } // closing stdin signals EOF to plantuml
 
-    let out = child.wait_with_output().ok()?;
+    let out = child
+        .wait_with_output()
+        .map_err(|e| format!("waiting for plantuml failed: {e}"))?;
+
     if !out.status.success() {
-        return None;
+        return Err(format!(
+            "plantuml exited with {} — check the diagram syntax",
+            out.status
+        ));
     }
 
-    let svg = String::from_utf8(out.stdout).ok()?;
+    let svg = String::from_utf8(out.stdout)
+        .map_err(|e| format!("plantuml produced invalid UTF-8: {e}"))?;
+
     if svg.contains("<svg") {
-        Some(svg)
+        Ok(svg)
     } else {
-        None
+        Err("plantuml produced no <svg> output".to_string())
     }
 }
 
@@ -405,9 +435,29 @@ fn render_svg_cached(hash: &str, uml_str: &str) -> String {
         }
     }
 
-    let svg = match find_plantuml_jar().and_then(|jar| render_with_jar(&jar, uml_str)) {
-        Some(svg) => svg,
-        None => download_puml_svg(uml_str),
+    let svg = match find_plantuml_jar() {
+        Some(jar) => match render_with_jar(&jar, uml_str) {
+            Ok(svg) => svg,
+            Err(reason) => {
+                println!(
+                    "warning: rsdoc could not render with `{}`: {reason}\n\
+                     falling back to plantuml.com",
+                    jar.display()
+                );
+                download_puml_svg(uml_str).unwrap_or_else(|e| {
+                    println!("warning: rsdoc could not render the diagram: {e}");
+                    String::new()
+                })
+            }
+        },
+        None => download_puml_svg(uml_str).unwrap_or_else(|e| {
+            println!(
+                "warning: rsdoc could not render the diagram: {e}\n\
+                 note: place a `plantuml.jar` next to Cargo.toml, or set RSDOC_PLANTUML_JAR, \
+                 to render without network access"
+            );
+            String::new()
+        }),
     };
 
     if svg.contains("<svg") {
@@ -526,7 +576,7 @@ fn handle_error(cb: impl FnOnce() -> Result<proc_macro::TokenStream>) -> proc_ma
     }
 }
 
-fn download_puml_svg(puml_str: &str) -> String {
+fn download_puml_svg(puml_str: &str) -> std::result::Result<String, String> {
     let compressed = deflate_bytes(puml_str.as_bytes());
     let encode64_str = save_http_png::encode64_(&compressed);
     let url = "https://www.plantuml.com/plantuml/svg/".to_string() + &encode64_str;
@@ -536,12 +586,23 @@ fn download_puml_svg(puml_str: &str) -> String {
         .timeout_write(Duration::from_secs(5))
         .build();
 
-    let ret = match agent.get(&url).call() {
-        Ok(response) => response.into_string(),
-        Err(_) => return String::default(),
-    };
+    let response = agent
+        .get(&url)
+        .call()
+        .map_err(|e| format!("request to plantuml.com failed: {e}"))?;
 
-    ret.unwrap_or_default()
+    let body = response
+        .into_string()
+        .map_err(|e| format!("could not read the response body: {e}"))?;
+
+    if body.contains("<svg") {
+        Ok(body)
+    } else {
+        Err(format!(
+            "plantuml.com returned {} bytes without an <svg> element",
+            body.len()
+        ))
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -715,7 +776,11 @@ fn transform_doc_lines(lines: &[String]) -> String {
         };
 
         let (lang, fence) = match fence_info {
-            Some((lang, fence)) if lang == "mermaid" || lang == "plantuml" => (lang, fence),
+            Some((lang, fence))
+                if matches!(lang.as_str(), "mermaid" | "plantuml" | "image" | "drawio") =>
+            {
+                (lang, fence)
+            }
             _ => {
                 out.push(line);
                 i += 1;
@@ -735,17 +800,32 @@ fn transform_doc_lines(lines: &[String]) -> String {
             i += 1; // consume the closing fence
         }
 
-        let html = if lang == "mermaid" {
-            save_mermaid(&body)
-        } else {
-            // PlantUML's server expects the diagram to be wrapped in
-            // @startuml/@enduml; fenced blocks usually omit them.
-            let src = if body.contains("@startuml") {
-                body.clone()
-            } else {
-                format!("@startuml\n{body}@enduml\n")
-            };
-            save_plantuml(&src)
+        let html = match lang.as_str() {
+            "mermaid" => save_mermaid(&body),
+            // `image` and `drawio` fences hold a single path.
+            "image" | "drawio" => {
+                let path = body
+                    .lines()
+                    .map(str::trim)
+                    .find(|l| !l.is_empty())
+                    .unwrap_or("");
+                if path.is_empty() {
+                    println!("warning: rsdoc found an empty `{lang}` block; expected a path");
+                    String::new()
+                } else {
+                    save_image(path)
+                }
+            }
+            _ => {
+                // PlantUML's server expects the diagram wrapped in
+                // @startuml/@enduml; fenced blocks usually omit them.
+                let src = if body.contains("@startuml") {
+                    body.clone()
+                } else {
+                    format!("@startuml\n{body}@enduml\n")
+                };
+                save_plantuml(&src)
+            }
         };
 
         out.push(html);
@@ -815,4 +895,52 @@ pub fn diagram(
     *attrs = new_attrs;
 
     quote!(#parsed).into()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn lines(items: &[&str]) -> Vec<String> {
+        items.iter().map(|s| (*s).to_string()).collect()
+    }
+
+    #[test]
+    fn escapes_html_metacharacters() {
+        assert_eq!(html_escape("a & b"), "a &amp; b");
+        assert_eq!(html_escape("<svg>"), "&lt;svg&gt;");
+        assert_eq!(html_escape("plain"), "plain");
+        // Ampersand first: otherwise the escaping would double-encode.
+        assert_eq!(html_escape("<&>"), "&lt;&amp;&gt;");
+    }
+
+    #[test]
+    fn keeps_plain_prose() {
+        let input = lines(&["Just text.", "", "More text."]);
+        assert_eq!(transform_doc_lines(&input), "Just text.\n\nMore text.");
+    }
+
+    #[test]
+    fn keeps_unrelated_code_fences() {
+        let input = lines(&["```rust", "let x = 1;", "```"]);
+        let out = transform_doc_lines(&input);
+        assert!(out.contains("```rust"), "opening fence lost: {out}");
+        assert!(out.contains("let x = 1;"), "code lost: {out}");
+    }
+
+    #[test]
+    fn leaves_text_surrounding_a_foreign_block_intact() {
+        let input = lines(&["Before.", "", "```rust", "fn a() {}", "```", "", "After."]);
+        let out = transform_doc_lines(&input);
+        assert!(out.starts_with("Before."), "prefix lost: {out}");
+        assert!(out.ends_with("After."), "suffix lost: {out}");
+    }
+
+    #[test]
+    fn ignores_an_unterminated_fence() {
+        // A fence with no closing marker must not swallow the rest silently.
+        let input = lines(&["text", "```rust"]);
+        let out = transform_doc_lines(&input);
+        assert!(out.contains("text"));
+    }
 }

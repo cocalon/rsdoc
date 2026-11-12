@@ -29,9 +29,9 @@ rsdoc = "0.4.0"
 
 ### `#[rsdoc::diagram]` — recommended
 
-Annotate the item and write an ordinary fenced block. Both `mermaid` and
-`plantuml` fences are recognised; everything else — prose, lists, other code
-fences — is passed through untouched.
+Annotate the item and write an ordinary fenced block. The `mermaid`, `plantuml`,
+`image` and `drawio` fences are recognised; everything else — prose, lists,
+other code fences — is passed through untouched.
 
 ````ignore
 #[rsdoc::diagram]
@@ -40,6 +40,10 @@ fences — is passed through untouched.
 /// ```mermaid
 /// graph TD
 ///   A --> B
+/// ```
+///
+/// ```drawio
+/// diagrams/architecture.drawio.svg
 /// ```
 pub fn pipeline() {}
 ````
