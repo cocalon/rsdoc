@@ -1,7 +1,7 @@
 # rsdoc
 
 This crate provides a procedural macro that transform
-PlandUML and Drawio diagrams in doc comments as PNG or SVG images.
+PlantUML and Drawio diagrams in doc comments as PNG or SVG images.
 The diagrams in doc comments as SVG images using [`drawio`].
 The UML diagrams and flow diagrams in doc comments as PNG images using [`plantUML`].
 
@@ -19,7 +19,7 @@ Add the following line to `Cargo.toml`.
 
 ```toml
 [dependencies]
-rsdoc = "0.1.0"
+rsdoc = "0.3.1"
 ```
 
 ### `plantuml!`
