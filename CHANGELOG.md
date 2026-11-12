@@ -7,6 +7,14 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+## [0.4.1] - 2026-11-12
+
+### Changed
+
+- The README now opens with a rendered example: a fenced `mermaid` block and the
+  diagram rustdoc produces from it, so the crate page shows the result instead of
+  only describing it.
+
 ## [0.4.0] - 2026-11-12
 
 ### Added

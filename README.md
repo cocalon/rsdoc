@@ -24,7 +24,7 @@ Add the following line to `Cargo.toml`.
 
 ```toml
 [dependencies]
-rsdoc = "0.4.0"
+rsdoc = "0.4.1"
 ```
 
 ### `#[rsdoc::diagram]` — recommended
@@ -50,6 +50,9 @@ pub fn pipeline() {}
 
 This is equivalent to the function-style macros below, but it reads like plain
 documentation and your editor highlights the diagram source.
+
+<img src="https://raw.githubusercontent.com/cocalon/rsdoc/main/example-mermaid.png"
+   alt="A fenced mermaid block, and what rustdoc renders from it" width="820">
 
 > The attribute is called `diagram`, not `mermaid`, because a proc-macro crate
 > exports every macro into a single namespace: `#[rsdoc::mermaid]` would collide
