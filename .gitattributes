@@ -1,0 +1,4 @@
+# Keep the bundled mermaid.js byte-identical across platforms. A CRLF conversion
+# would change its length and defeat the size check that avoids rewriting it on
+# every build.
+assets/mermaid.min.js -text
