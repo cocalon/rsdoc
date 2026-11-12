@@ -75,17 +75,37 @@ If your file is placed in a folder under the project directory, you can input th
     #[doc = rsdoc::plantuml_file!(pumls/test.puml)]
 
 ### `image!`
-If you want to attach pictures, such as PNG or SVG, you can do it this way   
+
+Attach any picture — PNG, JPEG or SVG:
 
     #[doc = rsdoc::image!(test.png)]
 
-And you can also use it with the Drawio tool, hope you like it!
+Relative paths inside the crate work as well:
 
-    #[doc = rsdoc::image!(test.drawio.svg)]
+    #[doc = rsdoc::image!(images/schema.png)]
 
-If your file is placed in a folder under the project directory, you can input the relative path directly like that.
+#### Drawio
 
-    #[doc = rsdoc::image!(images/test.drawio.svg)]
+`image!` works with drawio's *editable vector image* format. In drawio pick
+`File > Export as > SVG` and tick **Include a copy of my diagram**; the suggested
+file name then ends in `.drawio.svg`.
+
+That single file plays both roles: browsers render it as an ordinary vector
+image, and drawio reopens it as the original diagram, because the source XML is
+stored in the SVG element's `content` attribute. There is no separate `.drawio`
+file to keep in sync.
+
+    #[doc = rsdoc::image!(diagrams/architecture.drawio.svg)]
+
+rsdoc does not re-render `.drawio` sources — export again after changing a
+diagram. To check that a file really carries its source:
+
+```sh
+grep -c "mxfile\|mxGraphModel" diagrams/architecture.drawio.svg
+```
+
+A result of `0` means the export was a plain image, so keep the `.drawio` file
+alongside it.
 
 ### Tips
 
