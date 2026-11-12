@@ -281,7 +281,7 @@ pub fn image(img: proc_macro::TokenStream) -> proc_macro::TokenStream {
 
     // copy file
     if let Err(es) = fs::copy(&img, path_s) {
-        println!("{:?}", es);
+        println!("{es:?}");
     }
 
     handle_error(|| {
@@ -319,6 +319,105 @@ pub fn plantuml_file(img: proc_macro::TokenStream) -> proc_macro::TokenStream {
     })
 }
 
+/// Directory holding rendered output, keyed by a hash of the diagram source.
+///
+/// Rendering costs a network round-trip (or a JVM start), and `#[doc = ...]`
+/// expands during every build — not only during `cargo doc`. Caching the result
+/// on disk means a repeated build reads a file instead of asking plantuml.com
+/// again.
+fn cache_dir() -> std::path::PathBuf {
+    doc_dir()
+        .parent()
+        .map(|p| p.join("rsdoc-cache"))
+        .unwrap_or_else(|| std::path::PathBuf::from("./rsdoc-cache"))
+}
+
+/// Locate a local `plantuml.jar`.
+///
+/// Checked in order:
+///   1. the `RSDOC_PLANTUML_JAR` environment variable
+///   2. `plantuml.jar` next to the crate's `Cargo.toml`
+///
+/// Rendering locally removes the network dependency entirely, which is what
+/// issue #5 asks for. Falls back to plantuml.com when no jar is found.
+fn find_plantuml_jar() -> Option<std::path::PathBuf> {
+    use std::path::PathBuf;
+
+    if let Ok(p) = std::env::var("RSDOC_PLANTUML_JAR") {
+        let p = PathBuf::from(p);
+        if p.is_file() {
+            return Some(p);
+        }
+    }
+
+    if let Ok(manifest) = std::env::var("CARGO_MANIFEST_DIR") {
+        let p = PathBuf::from(manifest).join("plantuml.jar");
+        if p.is_file() {
+            return Some(p);
+        }
+    }
+
+    None
+}
+
+/// Render through a local `plantuml.jar` using its `-pipe` mode, which reads the
+/// source from stdin and writes SVG to stdout — no temporary files involved.
+fn render_with_jar(jar: &std::path::Path, uml_str: &str) -> Option<String> {
+    use std::io::Write;
+    use std::process::{Command, Stdio};
+
+    let mut child = Command::new("java")
+        .arg("-jar")
+        .arg(jar)
+        .arg("-tsvg")
+        .arg("-pipe")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .ok()?;
+
+    {
+        let mut stdin = child.stdin.take()?;
+        stdin.write_all(uml_str.as_bytes()).ok()?;
+    } // closing stdin signals EOF to plantuml
+
+    let out = child.wait_with_output().ok()?;
+    if !out.status.success() {
+        return None;
+    }
+
+    let svg = String::from_utf8(out.stdout).ok()?;
+    if svg.contains("<svg") {
+        Some(svg)
+    } else {
+        None
+    }
+}
+
+/// Return the SVG for `uml_str`, reusing the on-disk cache when possible.
+fn render_svg_cached(hash: &str, uml_str: &str) -> String {
+    let cache = cache_dir().join(format!("{hash}.svg"));
+
+    if let Ok(cached) = fs::read_to_string(&cache) {
+        if cached.contains("<svg") {
+            return cached;
+        }
+    }
+
+    let svg = match find_plantuml_jar().and_then(|jar| render_with_jar(&jar, uml_str)) {
+        Some(svg) => svg,
+        None => download_puml_svg(uml_str),
+    };
+
+    if svg.contains("<svg") {
+        let _ = fs::create_dir_all(cache_dir());
+        let _ = fs::write(&cache, &svg);
+    }
+
+    svg
+}
+
 fn save_plantuml(uml_str: &str) -> String {
     let mut output = String::new();
 
@@ -329,10 +428,10 @@ fn save_plantuml(uml_str: &str) -> String {
     let hash = hasher.result_str();
     let puml_dir = doc_dir().join("images").join("puml_files");
     let _ = fs::create_dir_all(&puml_dir);
-    let uml_file = puml_dir.join(format!("{}.png", hash));
+    let uml_file = puml_dir.join(format!("{hash}.png"));
     let uml_file_str = uml_file.to_string_lossy().to_string();
 
-    let svg = download_puml_svg(uml_str);
+    let svg = render_svg_cached(&hash, uml_str);
 
     if !svg.is_empty() {
         output.push_str(&("<p><div>".to_string() + svg.as_str() + "</div></p>"));
@@ -430,7 +529,7 @@ fn handle_error(cb: impl FnOnce() -> Result<proc_macro::TokenStream>) -> proc_ma
 fn download_puml_svg(puml_str: &str) -> String {
     let compressed = deflate_bytes(puml_str.as_bytes());
     let encode64_str = save_http_png::encode64_(&compressed);
-    let url = "http://www.plantuml.com/plantuml/svg/".to_string() + &encode64_str;
+    let url = "https://www.plantuml.com/plantuml/svg/".to_string() + &encode64_str;
 
     let agent = ureq::AgentBuilder::new()
         .timeout_read(Duration::from_secs(5))
@@ -555,7 +654,7 @@ pub fn mermaid_file(path: proc_macro::TokenStream) -> proc_macro::TokenStream {
         let output = match fs::read_to_string(&path) {
             Ok(data) => save_mermaid(&data),
             Err(e) => {
-                println!("warning: rsdoc could not read {}: {}", path, e);
+                println!("warning: rsdoc could not read {path}: {e}");
                 String::new()
             }
         };
@@ -564,4 +663,156 @@ pub fn mermaid_file(path: proc_macro::TokenStream) -> proc_macro::TokenStream {
             .into_token_stream()
             .into())
     })
+}
+
+// ---------------------------------------------------------------------------
+// Attribute macros
+//
+// A proc-macro crate exports every macro into a single namespace, so an
+// attribute macro cannot reuse the `mermaid` name already taken by the
+// function-style macro — `#[rsdoc::mermaid]` and `rsdoc::mermaid!` would
+// collide. `diagram` therefore takes the attribute role and handles fenced
+// blocks of any supported language.
+// ---------------------------------------------------------------------------
+
+/// Borrow the attribute list of an item, whatever kind it is.
+fn item_attrs_mut(item: &mut syn::Item) -> Option<&mut Vec<syn::Attribute>> {
+    use syn::Item;
+
+    match item {
+        Item::Const(i) => Some(&mut i.attrs),
+        Item::Enum(i) => Some(&mut i.attrs),
+        Item::Fn(i) => Some(&mut i.attrs),
+        Item::Impl(i) => Some(&mut i.attrs),
+        Item::Mod(i) => Some(&mut i.attrs),
+        Item::Static(i) => Some(&mut i.attrs),
+        Item::Struct(i) => Some(&mut i.attrs),
+        Item::Trait(i) => Some(&mut i.attrs),
+        Item::Type(i) => Some(&mut i.attrs),
+        Item::Union(i) => Some(&mut i.attrs),
+        _ => None,
+    }
+}
+
+/// Replace fenced `mermaid` and `plantuml` blocks with rendered output. Every
+/// other line is passed through untouched, so ordinary prose, lists and other
+/// code fences survive.
+fn transform_doc_lines(lines: &[String]) -> String {
+    let mut out: Vec<String> = Vec::new();
+    let mut i = 0;
+
+    while i < lines.len() {
+        let line = lines[i].clone();
+        let trimmed = line.trim_start();
+
+        // Detect an opening fence and the language that follows it.
+        let fence_info = if let Some(rest) = trimmed.strip_prefix("```") {
+            Some((rest.trim().to_string(), "```"))
+        } else {
+            trimmed
+                .strip_prefix("~~~")
+                .map(|rest| (rest.trim().to_string(), "~~~"))
+        };
+
+        let (lang, fence) = match fence_info {
+            Some((lang, fence)) if lang == "mermaid" || lang == "plantuml" => (lang, fence),
+            _ => {
+                out.push(line);
+                i += 1;
+                continue;
+            }
+        };
+
+        // Collect the block body up to the closing fence.
+        let mut body = String::new();
+        i += 1;
+        while i < lines.len() && !lines[i].trim_start().starts_with(fence) {
+            body.push_str(&lines[i]);
+            body.push('\n');
+            i += 1;
+        }
+        if i < lines.len() {
+            i += 1; // consume the closing fence
+        }
+
+        let html = if lang == "mermaid" {
+            save_mermaid(&body)
+        } else {
+            // PlantUML's server expects the diagram to be wrapped in
+            // @startuml/@enduml; fenced blocks usually omit them.
+            let src = if body.contains("@startuml") {
+                body.clone()
+            } else {
+                format!("@startuml\n{body}@enduml\n")
+            };
+            save_plantuml(&src)
+        };
+
+        out.push(html);
+    }
+
+    out.join("\n")
+}
+
+/// Render fenced diagram blocks found in the annotated item's documentation.
+///
+/// ```ignore
+/// #[rsdoc::diagram]
+/// /// ```mermaid
+/// /// graph TD
+/// ///   A --> B
+/// /// ```
+/// pub fn example() {}
+/// ```
+///
+/// Both `mermaid` and `plantuml` fences are recognised. The function-style
+/// macros (`rsdoc::mermaid!`, `rsdoc::plantuml!`) keep working unchanged, so
+/// neither form is deprecated.
+#[proc_macro_attribute]
+pub fn diagram(
+    _attr: proc_macro::TokenStream,
+    item: proc_macro::TokenStream,
+) -> proc_macro::TokenStream {
+    use syn::Item;
+
+    let mut parsed: Item = match syn::parse(item.clone()) {
+        Ok(parsed) => parsed,
+        Err(_) => return item,
+    };
+
+    let attrs = match item_attrs_mut(&mut parsed) {
+        Some(attrs) => attrs,
+        None => return item,
+    };
+
+    let mut lines: Vec<String> = Vec::new();
+    let mut others: Vec<syn::Attribute> = Vec::new();
+
+    for attr in attrs.iter() {
+        if attr.path.is_ident("doc") {
+            if let Ok(Meta::NameValue(nv)) = attr.parse_meta() {
+                if let Lit::Str(s) = nv.lit {
+                    for line in s.value().lines() {
+                        lines.push(line.to_string());
+                    }
+                    continue;
+                }
+            }
+        }
+        others.push(attr.clone());
+    }
+
+    if lines.is_empty() {
+        return quote!(#parsed).into();
+    }
+
+    let transformed = transform_doc_lines(&lines);
+    let doc_attr: syn::Attribute = syn::parse_quote!(#[doc = #transformed]);
+
+    let mut new_attrs = Vec::with_capacity(others.len() + 1);
+    new_attrs.push(doc_attr);
+    new_attrs.extend(others);
+    *attrs = new_attrs;
+
+    quote!(#parsed).into()
 }

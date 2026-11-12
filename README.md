@@ -9,7 +9,7 @@ into images inside your rustdoc output.
 - **[`drawio`] or any image**: copied into the output directory and referenced from
   the generated page.
 
-*Requires Rust version 1.54 or later or equivalent nightly builds.*
+*Requires Rust version 1.71 or later.*
 
 [Mermaid]: https://mermaid.js.org/
 [`drawio`]: https://drawio-app.com/
@@ -26,6 +26,30 @@ Add the following line to `Cargo.toml`.
 [dependencies]
 rsdoc = "0.4.0"
 ```
+
+### `#[rsdoc::diagram]` — recommended
+
+Annotate the item and write an ordinary fenced block. Both `mermaid` and
+`plantuml` fences are recognised; everything else — prose, lists, other code
+fences — is passed through untouched.
+
+````ignore
+#[rsdoc::diagram]
+/// Pipeline overview:
+///
+/// ```mermaid
+/// graph TD
+///   A --> B
+/// ```
+pub fn pipeline() {}
+````
+
+This is equivalent to the function-style macros below, but it reads like plain
+documentation and your editor highlights the diagram source.
+
+> The attribute is called `diagram`, not `mermaid`, because a proc-macro crate
+> exports every macro into a single namespace: `#[rsdoc::mermaid]` would collide
+> with the existing `rsdoc::mermaid!`.
 
 ### `mermaid!`
 
@@ -62,8 +86,11 @@ In this way, you can directly use the Alt+D key to browse the UML diagram in the
     )]
     pub fn test_function(){}
 
-PlantUML diagrams are rendered by requesting `plantuml.com`, so this macro does
-need network access at build time.
+By default PlantUML diagrams are rendered by requesting `plantuml.com`, so this
+macro does need network access at build time. To render locally instead, put a
+`plantuml.jar` next to `Cargo.toml` or point the `RSDOC_PLANTUML_JAR` environment
+variable at one — rsdoc then runs `java -jar plantuml.jar -tsvg -pipe` and nothing
+leaves the machine.
 
 ### `plantuml_file!`
 Or you can directly attach the puml file stored as a file
@@ -109,8 +136,12 @@ alongside it.
 
 ### Tips
 
- - Using these macros increases the compilation time. Wrap a call in
-   `#[cfg_attr(doc, ...)]` if you only want the diagram in documentation builds.
+ - These macros expand during **every** build, not only `cargo doc`, because
+   `#[doc = ...]` is a regular attribute. Rendered diagrams are therefore cached
+   in `target/rsdoc-cache/<sha1>.svg`; a rebuild reads the cache instead of
+   rendering again. Delete that directory to force a refresh.
+ - Wrap a call in `#[cfg_attr(doc, ...)]` if you only want the diagram in
+   documentation builds.
  - The bundled `mermaid.js` adds roughly 3.4 MiB to the crate. It is written to
    the documentation root once per build tree, not embedded into every page.
 

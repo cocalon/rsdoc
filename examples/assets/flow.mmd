@@ -1,0 +1,6 @@
+sequenceDiagram
+    participant U as User
+    participant R as rustdoc
+    U->>R: cargo doc
+    R->>R: expand macros
+    R-->>U: HTML with SVG

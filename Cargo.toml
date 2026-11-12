@@ -18,10 +18,9 @@ default = []
 
 [dependencies]
 proc-macro2 = "1"
-syn = "1.0.41"
+syn = { version = "1.0.41", features = ["full"] }
 quote = "1"
 ureq = "2.6.2"
-clap = {version = "3.1.6", features = ["derive"]}
 deflate = "1.0.0"
 rust-crypto = "0.2.36"
 

@@ -1,18 +1,8 @@
-use clap::Parser;
 use std::fs::{self, File};
 use std::path::Path;
 use std::time::Duration;
 
 use deflate::deflate_bytes;
-
-#[derive(Parser, Debug)]
-#[clap(version, about, long_about = None)]
-struct Args {
-    #[clap(help = "URL of the file to download")]
-    url: String,
-    #[clap(short, long, help = "Output filename")]
-    output: Option<String>,
-}
 
 fn create_output_file(output_filename: &str) -> Result<File, String> {
     let output_file_path = Path::new(output_filename);
@@ -20,16 +10,14 @@ fn create_output_file(output_filename: &str) -> Result<File, String> {
     // never overwrite the output file
     if output_file_path.exists() {
         return Err(format!(
-            "output file {} already exists, aborting...",
-            output_filename
+            "output file {output_filename} already exists, aborting..."
         ));
     }
 
     match File::create(output_file_path) {
         Ok(file) => Ok(file),
         Err(e) => Err(format!(
-            "failed to open file {} for writing; cause: {}",
-            output_filename, e
+            "failed to open file {output_filename} for writing; cause: {e}"
         )),
     }
 }
@@ -128,7 +116,7 @@ pub fn download_puml(puml_str: &str, png_save_path_name: &str) -> bool {
 
     let compressed = deflate_bytes(puml_str.as_bytes());
     let encode64_str = encode64_(&compressed);
-    let url = "http://www.plantuml.com/plantuml/png/".to_string() + &encode64_str;
+    let url = "https://www.plantuml.com/plantuml/png/".to_string() + &encode64_str;
 
     save_png(&url, png_save_path_name)
 }
