@@ -247,6 +247,15 @@ const ASSET_BOOTSTRAP: &str = r#"<script>
   }
 
   function resolve() {
+    // Wide diagrams used to push the rustdoc content area sideways, producing a
+    // horizontal scrollbar. Constrain both diagrams and referenced images to the
+    // column width; `height:auto` keeps the aspect ratio.
+    var style = document.createElement("style");
+    style.textContent =
+      "pre.mermaid svg{max-width:100%;height:auto;}" +
+      "img[data-rsdoc-src]{max-width:100%;height:auto;}";
+    document.head.appendChild(style);
+
     var imgs = document.querySelectorAll("img[data-rsdoc-src]");
     for (var i = 0; i < imgs.length; i++) { bindImage(imgs[i]); }
 
