@@ -329,17 +329,12 @@ pub fn badges(_: proc_macro::TokenStream) -> proc_macro::TokenStream {
         let mut parts: Vec<String> = Vec::new();
 
         if !name.is_empty() {
-            parts.push(format!(
-                "<a href=\"https://crates.io/crates/{name}\">crates.io</a>"
-            ));
-            parts.push(format!("<a href=\"https://docs.rs/{name}\">docs.rs</a>"));
+            parts.push(format!("[crates.io](https://crates.io/crates/{name})"));
+            parts.push(format!("[docs.rs](https://docs.rs/{name})"));
         }
 
         if !repository.is_empty() {
-            parts.push(format!(
-                "<a href=\"{}\">source</a>",
-                html_escape(&repository)
-            ));
+            parts.push(format!("[source]({repository})"));
         }
 
         if !version.is_empty() {
@@ -356,7 +351,10 @@ pub fn badges(_: proc_macro::TokenStream) -> proc_macro::TokenStream {
                 .into());
         }
 
-        let output = format!("<p class=\"rsdoc-badges\">{}</p>", parts.join(" · "));
+        // Written as markdown rather than a <p>: an HTML block would swallow any
+        // heading or prose written immediately after it, which is exactly where
+        // `#![doc = rsdoc::badges!()]` tends to sit.
+        let output = format!("{}\n\n", parts.join(" · "));
 
         Ok(LitStr::new(&output, Span::call_site())
             .into_token_stream()
@@ -364,7 +362,81 @@ pub fn badges(_: proc_macro::TokenStream) -> proc_macro::TokenStream {
     })
 }
 
-///Attach pictures, such as PNG or SVG, you can do it this way
+/// Escape HTML and turn `…` spans into `<code>…</code>`.
+///
+/// The notice body lives inside an HTML block, where markdown is not parsed, so
+/// the one bit of inline formatting people actually reach for is handled here.
+fn with_inline_code(text: &str) -> String {
+    let escaped = html_escape(text);
+    let mut out = String::with_capacity(escaped.len());
+    let mut in_code = false;
+
+    for ch in escaped.chars() {
+        if ch == '`' {
+            out.push_str(if in_code { "</code>" } else { "<code>" });
+            in_code = !in_code;
+        } else {
+            out.push(ch);
+        }
+    }
+
+    out
+}
+
+/// A coloured callout, for deprecation or migration notices.
+///
+/// ```ignore
+/// #![doc = rsdoc::notice!(warning, "This crate is unmaintained, use `foo` instead.")]
+/// ```
+///
+/// Three levels are available: `info`, `warning` and `danger`. The body is plain
+/// text with two exceptions — backticks become `<code>`, and HTML is escaped, so
+/// nothing you write can break the page layout.
+///
+/// Widths and colours are inline, so the callout looks the same in every rustdoc
+/// theme without a stylesheet.
+#[proc_macro]
+pub fn notice(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
+    use syn::parse::Parser as _;
+
+    let parser = |input: syn::parse::ParseStream<'_>| -> Result<(syn::Ident, String)> {
+        let level: syn::Ident = input.parse()?;
+        input.parse::<syn::Token![,]>()?;
+        let text: LitStr = input.parse()?;
+
+        if !matches!(level.to_string().as_str(), "info" | "warning" | "danger") {
+            return Err(Error::new(
+                level.span(),
+                format!("unknown level `{level}`; expected `info`, `warning` or `danger`"),
+            ));
+        }
+
+        Ok((level, text.value()))
+    };
+
+    handle_error(|| {
+        let (level, text) = parser.parse(input)?;
+
+        let (accent, background, icon, label) = match level.to_string().as_str() {
+            "danger" => ("#cf222e", "#ffebe9", "&#9940;", "Important"),
+            "info" => ("#0969da", "#ddf4ff", "&#8505;", "Note"),
+            _ => ("#9a6700", "#fff8c5", "&#9888;", "Warning"),
+        };
+
+        let html = format!(
+            "<div style=\"border-left:4px solid {accent};background:{background};\
+             padding:12px 16px;margin:1em 0;border-radius:4px\">\
+             <strong style=\"color:{accent}\">{icon} {label}</strong><br>\n{}</div>\n",
+            with_inline_code(&text)
+        );
+
+        Ok(LitStr::new(&html, Span::call_site())
+            .into_token_stream()
+            .into())
+    })
+}
+
+/// Attach pictures, such as PNG or SVG, you can do it this way
 /// #[doc = rsdoc::image!(test.png)]
 #[proc_macro]
 pub fn image(img: proc_macro::TokenStream) -> proc_macro::TokenStream {

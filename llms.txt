@@ -101,6 +101,15 @@ Emits `crates.io · docs.rs · source · vX.Y.Z · LICENSE`, all read from the
 package metadata (`CARGO_PKG_NAME`, `CARGO_PKG_REPOSITORY`, …). Missing fields
 are skipped.
 
+## Notices
+
+```rust
+#[doc = rsdoc::notice!(warning, "This crate is unmaintained. Use `newcrate` instead.")]
+```
+
+Levels: `info` (blue), `warning` (yellow), `danger` (red). Styling is inline, so
+no stylesheet is needed. Backticks become `<code>`; other HTML is escaped.
+
 ## Common mistakes
 
 - The attribute is `diagram`, **not** `mermaid`. A proc-macro crate exports every

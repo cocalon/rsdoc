@@ -9,6 +9,10 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Added
 
+- `notice!` renders a coloured callout in three levels — `info`, `warning`,
+  `danger` — for deprecation and migration notes. Styling is inline so it works
+  in every rustdoc theme without a stylesheet; backticks in the body become
+  `<code>`.
 - `badges!` emits a one-line row of links — `crates.io · docs.rs · source ·
   vX.Y.Z · LICENSE` — built from the package metadata, so nothing has to be kept
   in sync by hand. Metadata that is absent is simply skipped.

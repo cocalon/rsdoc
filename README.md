@@ -131,6 +131,18 @@ crates.io · docs.rs · source · v0.4.1 · MIT OR Apache-2.0
 Links whose metadata is missing are skipped, so a crate without a `repository`
 field simply gets no source link.
 
+### `notice!`
+
+A coloured callout for deprecation or migration notices:
+
+```ignore
+#[doc = rsdoc::notice!(warning, "This crate is unmaintained. Use `newcrate` instead.")]
+```
+
+Three levels — `info`, `warning` and `danger` — styled inline, so they look the
+same in every rustdoc theme without shipping a stylesheet. Backticks in the body
+become `<code>`; everything else is escaped.
+
 ### `mermaid!`
 
 Render a [Mermaid] diagram. Write the source inline as doc comments:
