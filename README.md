@@ -58,6 +58,19 @@ documentation and your editor highlights the diagram source.
 > exports every macro into a single namespace: `#[rsdoc::mermaid]` would collide
 > with the existing `rsdoc::mermaid!`.
 
+Large diagrams are easier to keep in their own file. Write a directive on its
+own line and the file is read from the crate root:
+
+````ignore
+#[rsdoc::diagram]
+/// Architecture overview:
+///
+/// include_mmd!("docs/diagrams/architecture.mmd")
+///
+/// include_puml!("docs/diagrams/sequence.puml")
+pub fn architecture() {}
+````
+
 ### `mermaid!`
 
 Render a [Mermaid] diagram. Write the source inline as doc comments:

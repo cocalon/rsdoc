@@ -426,6 +426,22 @@ fn render_with_jar(jar: &std::path::Path, uml_str: &str) -> std::result::Result<
 }
 
 /// Return the SVG for `uml_str`, reusing the on-disk cache when possible.
+/// A short single-line digest of a diagram source, used in warnings.
+///
+/// Without it a failing diagram in a crate with dozens of them is impossible to
+/// identify: the compiler output carries no location for a `#[doc]` attribute
+/// expansion. Showing the beginning of the source is enough to find it.
+fn preview(src: &str) -> String {
+    const LIMIT: usize = 48;
+
+    let flat = src.split_whitespace().collect::<Vec<_>>().join(" ");
+    if flat.chars().count() > LIMIT {
+        format!("{}…", flat.chars().take(LIMIT).collect::<String>())
+    } else {
+        flat
+    }
+}
+
 fn render_svg_cached(hash: &str, uml_str: &str) -> String {
     let cache = cache_dir().join(format!("{hash}.svg"));
 
@@ -440,21 +456,26 @@ fn render_svg_cached(hash: &str, uml_str: &str) -> String {
             Ok(svg) => svg,
             Err(reason) => {
                 println!(
-                    "warning: rsdoc could not render with `{}`: {reason}\n\
+                    "warning: rsdoc could not render `{}` with `{}`: {reason}\n\
                      falling back to plantuml.com",
+                    preview(uml_str),
                     jar.display()
                 );
                 download_puml_svg(uml_str).unwrap_or_else(|e| {
-                    println!("warning: rsdoc could not render the diagram: {e}");
+                    println!(
+                        "warning: rsdoc could not render `{}`: {e}",
+                        preview(uml_str)
+                    );
                     String::new()
                 })
             }
         },
         None => download_puml_svg(uml_str).unwrap_or_else(|e| {
             println!(
-                "warning: rsdoc could not render the diagram: {e}\n\
+                "warning: rsdoc could not render `{}`: {e}\n\
                  note: place a `plantuml.jar` next to Cargo.toml, or set RSDOC_PLANTUML_JAR, \
-                 to render without network access"
+                 to render without network access",
+                preview(uml_str)
             );
             String::new()
         }),
@@ -755,6 +776,45 @@ fn item_attrs_mut(item: &mut syn::Item) -> Option<&mut Vec<syn::Attribute>> {
     }
 }
 
+/// PlantUML's server expects the diagram wrapped in `@startuml`/`@enduml`;
+/// fenced blocks and included files usually omit them.
+fn wrap_plantuml(body: String) -> String {
+    if body.contains("@startuml") {
+        body
+    } else {
+        format!("@startuml\n{body}@enduml\n")
+    }
+}
+
+/// Recognise a standalone `include_mmd!("path")` or `include_puml!("path")`
+/// directive on its own line in a doc comment.
+///
+/// Large diagrams are awkward to keep inline — they drown the item they
+/// document. These directives let the source live in its own file.
+fn parse_include(line: &str) -> Option<(&'static str, String)> {
+    let trimmed = line.trim();
+
+    for (prefix, kind) in [("include_mmd!(", "mermaid"), ("include_puml!(", "plantuml")] {
+        if let Some(rest) = trimmed.strip_prefix(prefix) {
+            let rest = rest.strip_suffix(')')?.trim();
+            let path = rest.strip_prefix('"')?.strip_suffix('"')?;
+            return Some((kind, path.to_string()));
+        }
+    }
+
+    None
+}
+
+/// Read an included diagram, resolved against the crate root rather than the
+/// file the macro was written in.
+fn read_include(path: &str) -> std::result::Result<String, String> {
+    let base = std::env::var("CARGO_MANIFEST_DIR")
+        .map_err(|_| "CARGO_MANIFEST_DIR is not set".to_string())?;
+    let full = std::path::Path::new(&base).join(path);
+
+    fs::read_to_string(&full).map_err(|e| format!("could not read `{}`: {e}", full.display()))
+}
+
 /// Replace fenced `mermaid` and `plantuml` blocks with rendered output. Every
 /// other line is passed through untouched, so ordinary prose, lists and other
 /// code fences survive.
@@ -764,6 +824,27 @@ fn transform_doc_lines(lines: &[String]) -> String {
 
     while i < lines.len() {
         let line = lines[i].clone();
+
+        // A standalone include directive takes the whole line.
+        if let Some((kind, path)) = parse_include(&line) {
+            match read_include(&path) {
+                Ok(body) => {
+                    let html = if kind == "mermaid" {
+                        save_mermaid(&body)
+                    } else {
+                        save_plantuml(&wrap_plantuml(body))
+                    };
+                    out.push(html);
+                }
+                Err(e) => {
+                    println!("warning: rsdoc {e}");
+                    out.push(line);
+                }
+            }
+            i += 1;
+            continue;
+        }
+
         let trimmed = line.trim_start();
 
         // Detect an opening fence and the language that follows it.
@@ -816,16 +897,7 @@ fn transform_doc_lines(lines: &[String]) -> String {
                     save_image(path)
                 }
             }
-            _ => {
-                // PlantUML's server expects the diagram wrapped in
-                // @startuml/@enduml; fenced blocks usually omit them.
-                let src = if body.contains("@startuml") {
-                    body.clone()
-                } else {
-                    format!("@startuml\n{body}@enduml\n")
-                };
-                save_plantuml(&src)
-            }
+            _ => save_plantuml(&wrap_plantuml(body)),
         };
 
         out.push(html);
@@ -942,5 +1014,32 @@ mod tests {
         let input = lines(&["text", "```rust"]);
         let out = transform_doc_lines(&input);
         assert!(out.contains("text"));
+    }
+
+    #[test]
+    fn preview_flattens_and_truncates() {
+        assert_eq!(preview("graph TD\n   A --> B"), "graph TD A --> B");
+
+        let long = "alpha ".repeat(20);
+        let p = preview(&long);
+        assert!(p.ends_with('…'), "expected an ellipsis: {p}");
+        assert_eq!(p.chars().count(), 49, "48 chars plus the ellipsis");
+    }
+
+    #[test]
+    fn parses_include_directives() {
+        assert_eq!(
+            parse_include(r#"include_mmd!("diagrams/a.mmd")"#),
+            Some(("mermaid", "diagrams/a.mmd".to_string()))
+        );
+        assert_eq!(
+            parse_include(r#"   include_puml!("b.puml")   "#),
+            Some(("plantuml", "b.puml".to_string()))
+        );
+
+        // Anything that is not exactly the directive stays as written.
+        assert_eq!(parse_include("include_mmd!(no_quotes)"), None);
+        assert_eq!(parse_include(r#"include_mmd!("a.mmd") trailing"#), None);
+        assert_eq!(parse_include("ordinary prose"), None);
     }
 }

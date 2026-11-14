@@ -7,6 +7,20 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Added
+
+- `include_mmd!("path")` and `include_puml!("path")` directives on their own line
+  in a doc comment pull a diagram from a file instead of writing it inline. Paths
+  resolve against the crate root, so a large diagram no longer drowns the item it
+  documents.
+
+### Fixed
+
+- Render warnings now quote the diagram that failed — and the jar path when a
+  local jar was involved. Previously the output was
+  `could not render the diagram: <reason>` with no way to tell which one, which
+  is useless in a crate with dozens of them.
+
 ## [0.4.1] - 2026-11-12
 
 ### Changed
