@@ -95,6 +95,22 @@ own line and the file is read from the crate root:
 pub fn architecture() {}
 ````
 
+Mermaid themes can be pinned per page:
+
+````ignore
+#[rsdoc::diagram(theme = "forest")]
+/// ```mermaid
+/// graph TD
+///   A --> B
+/// ```
+pub fn themed() {}
+````
+
+`theme` accepts any Mermaid palette — `default`, `dark`, `forest`, `neutral`,
+`base`. A single block can override it by appending the theme to the fence, as in
+a fence opening with `mermaid theme=neutral`. With neither, the diagram follows
+rustdoc's light/dark setting.
+
 ### `mermaid!`
 
 Render a [Mermaid] diagram. Write the source inline as doc comments:
@@ -169,6 +185,12 @@ The same options work inside a fence:
     /// alt = System overview
     /// ```
     pub fn architecture() {}
+
+Add a caption and the picture becomes a `<figure>` with a `<figcaption>`:
+
+    #[doc = rsdoc::image!("diagrams/arch.png", caption = "Figure 1: system overview")]
+
+Every image is marked `loading="lazy"`, so pages with many of them open faster.
 
 #### Drawio
 

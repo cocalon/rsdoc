@@ -56,6 +56,7 @@ the macro appears in.
 ```rust
 #[doc = rsdoc::image!("diagrams/arch.png", width = 600)]
 #[doc = rsdoc::image!("diagrams/arch.png", width = "80%", alt = "System overview")]
+#[doc = rsdoc::image!("diagrams/arch.png", caption = "Figure 1: overview")]
 ```
 
 Or inside a fence, one `key = value` per line:
@@ -66,9 +67,29 @@ Or inside a fence, one `key = value` per line:
 /// diagrams/arch.png
 /// width = 600
 /// alt = System overview
+/// caption = Figure 1: overview
 /// ```
 pub fn architecture() {}
 ```
+
+`caption` wraps the image in a `<figure>` with a `<figcaption>`. All images carry
+`loading="lazy"`.
+
+## Mermaid themes
+
+```rust
+#[rsdoc::diagram(theme = "forest")]
+/// ```mermaid
+/// graph TD
+///   A --> B
+/// ```
+pub fn themed() {}
+```
+
+`theme` takes any Mermaid palette: `default`, `dark`, `forest`, `neutral`, `base`.
+A single fence overrides it with a trailing attribute — a fence opening of
+`mermaid theme=neutral`. Without either, the diagram follows rustdoc's light/dark
+setting.
 
 ## Common mistakes
 

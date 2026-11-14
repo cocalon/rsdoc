@@ -166,6 +166,36 @@ fn image_paths_resolve_from_a_nested_page() {
 }
 
 #[test]
+fn a_pinned_theme_reaches_mermaid() {
+    let Some(chrome) = chrome_binary() else {
+        eprintln!("no Chrome found; skipping browser test");
+        return;
+    };
+
+    let dir = scratch("theme");
+    fs::copy(
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("assets/mermaid.min.js"),
+        dir.join("mermaid.min.js"),
+    )
+    .expect("copy mermaid.min.js");
+
+    let page = write_page(
+        &dir,
+        "",
+        "<pre class=\"mermaid\" data-theme=\"forest\">graph TD\n  A --> B</pre>",
+        "",
+    );
+
+    let dom = dump_dom(&chrome, &page);
+    // The forest palette fills nodes with #cde498; the default one is #ECECFF.
+    assert!(
+        dom.contains("cde498") || dom.contains("205, 228, 152"),
+        "the pinned theme did not reach mermaid; DOM starts with:\n{}",
+        &dom[..dom.len().min(400)]
+    );
+}
+
+#[test]
 fn wide_content_is_constrained_by_the_injected_style() {
     let Some(chrome) = chrome_binary() else {
         eprintln!("no Chrome found; skipping browser test");

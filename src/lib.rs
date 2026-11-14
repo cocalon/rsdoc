@@ -172,6 +172,7 @@ const ASSET_BOOTSTRAP: &str = concat!("<script>\n", include_str!("bootstrap.js")
 struct ImageOptions {
     width: Option<String>,
     alt: Option<String>,
+    caption: Option<String>,
 }
 
 /// Parse `image!("path.png", width = 600, alt = "…")`.
@@ -212,10 +213,14 @@ fn parse_image_args(tokens: proc_macro::TokenStream) -> Option<(String, ImageOpt
                     let value: LitStr = input.parse()?;
                     opts.alt = Some(value.value());
                 }
+                "caption" => {
+                    let value: LitStr = input.parse()?;
+                    opts.caption = Some(value.value());
+                }
                 other => {
                     return Err(Error::new(
                         key.span(),
-                        format!("unknown option `{other}`; expected `width` or `alt`"),
+                        format!("unknown option `{other}`; expected `width`, `alt` or `caption`"),
                     ))
                 }
             }
@@ -240,6 +245,7 @@ fn parse_inline_options<'a>(lines: impl Iterator<Item = &'a str>) -> ImageOption
         match key.trim() {
             "width" => opts.width = Some(value),
             "alt" => opts.alt = Some(value),
+            "caption" => opts.caption = Some(value),
             _ => {}
         }
     }
@@ -275,12 +281,23 @@ fn save_image(img: &str, opts: &ImageOptions) -> String {
         None => String::new(),
     };
 
-    // The blank line matters: without it markdown treats the <img> and the
+    let tag =
+        format!("<img data-rsdoc-src=\"images/{img}\" alt=\"{alt}\"{width} loading=\"lazy\"/>");
+
+    // A caption turns the image into a figure; without one a plain paragraph
+    // keeps the historical output unchanged.
+    let body = match &opts.caption {
+        Some(caption) => format!(
+            "<figure>{tag}<figcaption>{}</figcaption></figure>",
+            html_escape(caption)
+        ),
+        None => format!("<p>{tag}</p>"),
+    };
+
+    // The blank line matters: without it markdown treats the markup and the
     // <script> as one HTML block, which then ends at the first blank line
     // inside the script — leaving the rest of the JS to be parsed as prose.
-    format!(
-        "<p><img data-rsdoc-src=\"images/{img}\" alt=\"{alt}\"{width}/></p>\n\n{ASSET_BOOTSTRAP}"
-    )
+    format!("{body}\n\n{ASSET_BOOTSTRAP}")
 }
 
 ///Attach pictures, such as PNG or SVG, you can do it this way
@@ -939,15 +956,22 @@ fn validate_mermaid(src: &str) -> Vec<String> {
     problems
 }
 
-fn save_mermaid(mermaid_str: &str) -> String {
+fn save_mermaid(mermaid_str: &str, theme: Option<&str>) -> String {
     ensure_mermaid_asset();
 
     for problem in validate_mermaid(mermaid_str) {
         report("mermaid", &problem, &preview(mermaid_str));
     }
 
+    // The theme rides on the element; the bootstrap picks the first one it finds
+    // and uses it for the whole page, since Mermaid is initialised once.
+    let data_theme = match theme {
+        Some(theme) => format!(" data-theme=\"{}\"", html_escape(theme)),
+        None => String::new(),
+    };
+
     let mut output = String::new();
-    output.push_str("<pre class=\"mermaid\">\n");
+    output.push_str(&format!("<pre class=\"mermaid\"{data_theme}>\n"));
     output.push_str(&html_escape(mermaid_str));
     output.push_str("\n</pre>\n\n");
     output.push_str(ASSET_BOOTSTRAP);
@@ -972,7 +996,7 @@ pub fn mermaid(tokens: proc_macro::TokenStream) -> proc_macro::TokenStream {
 
     handle_error(|| {
         let mermaid_str = collect_source(input)?;
-        let output = save_mermaid(&mermaid_str);
+        let output = save_mermaid(&mermaid_str, None);
 
         Ok(LitStr::new(&output, Span::call_site())
             .into_token_stream()
@@ -992,7 +1016,7 @@ pub fn mermaid_file(path: proc_macro::TokenStream) -> proc_macro::TokenStream {
 
     handle_error(|| {
         let output = match fs::read_to_string(&path) {
-            Ok(data) => save_mermaid(&data),
+            Ok(data) => save_mermaid(&data, None),
             Err(e) => {
                 report("mermaid", &format!("could not read the file: {e}"), &path);
                 String::new()
@@ -1076,7 +1100,57 @@ fn read_include(path: &str) -> std::result::Result<String, String> {
 /// Replace fenced `mermaid` and `plantuml` blocks with rendered output. Every
 /// other line is passed through untouched, so ordinary prose, lists and other
 /// code fences survive.
-fn transform_doc_lines(lines: &[String]) -> String {
+/// Split the text after an opening fence into its language and trailing
+/// attributes: `mermaid theme=forest` becomes `("mermaid", "theme=forest")`.
+fn split_fence(rest: &str, fence: &'static str) -> (String, String, &'static str) {
+    let mut parts = rest.trim().splitn(2, char::is_whitespace);
+    let lang = parts.next().unwrap_or("").to_string();
+    let attrs = parts.next().unwrap_or("").trim().to_string();
+
+    (lang, attrs, fence)
+}
+
+/// Read `theme=forest` out of a fence's trailing attributes.
+fn fence_theme(attrs: &str) -> Option<String> {
+    attrs
+        .split_whitespace()
+        .find_map(|part| part.strip_prefix("theme="))
+        .map(|value| value.trim_matches('"').to_string())
+}
+
+/// Parse the arguments of `#[rsdoc::diagram(theme = "forest")]`.
+fn parse_diagram_theme(attr: proc_macro::TokenStream) -> Option<String> {
+    if attr.is_empty() {
+        return None;
+    }
+
+    use syn::parse::Parser as _;
+
+    let parser = |input: syn::parse::ParseStream<'_>| -> Result<String> {
+        let key: syn::Ident = input.parse()?;
+        input.parse::<syn::Token![=]>()?;
+        let value: LitStr = input.parse()?;
+
+        if key != "theme" {
+            return Err(Error::new(
+                key.span(),
+                "the attribute only accepts `theme = \"…\"`",
+            ));
+        }
+
+        Ok(value.value())
+    };
+
+    match parser.parse(attr) {
+        Ok(theme) => Some(theme),
+        Err(e) => {
+            println!("warning: rsdoc ignored the `diagram` arguments: {e}");
+            None
+        }
+    }
+}
+
+fn transform_doc_lines(lines: &[String], theme: Option<&str>) -> String {
     let mut out: Vec<String> = Vec::new();
     let mut i = 0;
 
@@ -1088,7 +1162,7 @@ fn transform_doc_lines(lines: &[String]) -> String {
             match read_include(&path) {
                 Ok(body) => {
                     let html = if kind == "mermaid" {
-                        save_mermaid(&body)
+                        save_mermaid(&body, theme)
                     } else {
                         save_plantuml(&wrap_plantuml(body))
                     };
@@ -1105,20 +1179,22 @@ fn transform_doc_lines(lines: &[String]) -> String {
 
         let trimmed = line.trim_start();
 
-        // Detect an opening fence and the language that follows it.
-        let fence_info = if let Some(rest) = trimmed.strip_prefix("```") {
-            Some((rest.trim().to_string(), "```"))
-        } else {
-            trimmed
-                .strip_prefix("~~~")
-                .map(|rest| (rest.trim().to_string(), "~~~"))
-        };
+        // Detect an opening fence, the language, and any trailing attributes
+        // such as `mermaid theme=forest`.
+        let fence_info = trimmed
+            .strip_prefix("```")
+            .map(|rest| split_fence(rest, "```"))
+            .or_else(|| {
+                trimmed
+                    .strip_prefix("~~~")
+                    .map(|rest| split_fence(rest, "~~~"))
+            });
 
-        let (lang, fence) = match fence_info {
-            Some((lang, fence))
-                if matches!(lang.as_str(), "mermaid" | "plantuml" | "image" | "drawio") =>
+        let (lang, fence_attrs, fence) = match fence_info {
+            Some(info)
+                if matches!(info.0.as_str(), "mermaid" | "plantuml" | "image" | "drawio") =>
             {
-                (lang, fence)
+                info
             }
             _ => {
                 out.push(line);
@@ -1140,7 +1216,10 @@ fn transform_doc_lines(lines: &[String]) -> String {
         }
 
         let html = match lang.as_str() {
-            "mermaid" => save_mermaid(&body),
+            "mermaid" => {
+                let block_theme = fence_theme(&fence_attrs);
+                save_mermaid(&body, block_theme.as_deref().or(theme))
+            }
             // `image` and `drawio` fences hold a path, optionally followed by
             // `width = …` or `alt = …` lines.
             "image" | "drawio" => {
@@ -1184,10 +1263,12 @@ fn transform_doc_lines(lines: &[String]) -> String {
 /// neither form is deprecated.
 #[proc_macro_attribute]
 pub fn diagram(
-    _attr: proc_macro::TokenStream,
+    attr: proc_macro::TokenStream,
     item: proc_macro::TokenStream,
 ) -> proc_macro::TokenStream {
     use syn::Item;
+
+    let theme = parse_diagram_theme(attr);
 
     let mut parsed: Item = match syn::parse(item.clone()) {
         Ok(parsed) => parsed,
@@ -1220,7 +1301,7 @@ pub fn diagram(
         return quote!(#parsed).into();
     }
 
-    let transformed = transform_doc_lines(&lines);
+    let transformed = transform_doc_lines(&lines, theme.as_deref());
     let doc_attr: syn::Attribute = syn::parse_quote!(#[doc = #transformed]);
 
     let mut new_attrs = Vec::with_capacity(others.len() + 1);
@@ -1251,13 +1332,16 @@ mod tests {
     #[test]
     fn keeps_plain_prose() {
         let input = lines(&["Just text.", "", "More text."]);
-        assert_eq!(transform_doc_lines(&input), "Just text.\n\nMore text.");
+        assert_eq!(
+            transform_doc_lines(&input, None),
+            "Just text.\n\nMore text."
+        );
     }
 
     #[test]
     fn keeps_unrelated_code_fences() {
         let input = lines(&["```rust", "let x = 1;", "```"]);
-        let out = transform_doc_lines(&input);
+        let out = transform_doc_lines(&input, None);
         assert!(out.contains("```rust"), "opening fence lost: {out}");
         assert!(out.contains("let x = 1;"), "code lost: {out}");
     }
@@ -1265,7 +1349,7 @@ mod tests {
     #[test]
     fn leaves_text_surrounding_a_foreign_block_intact() {
         let input = lines(&["Before.", "", "```rust", "fn a() {}", "```", "", "After."]);
-        let out = transform_doc_lines(&input);
+        let out = transform_doc_lines(&input, None);
         assert!(out.starts_with("Before."), "prefix lost: {out}");
         assert!(out.ends_with("After."), "suffix lost: {out}");
     }
@@ -1274,7 +1358,7 @@ mod tests {
     fn ignores_an_unterminated_fence() {
         // A fence with no closing marker must not swallow the rest silently.
         let input = lines(&["text", "```rust"]);
-        let out = transform_doc_lines(&input);
+        let out = transform_doc_lines(&input, None);
         assert!(out.contains("text"));
     }
 
@@ -1433,5 +1517,25 @@ mod tests {
         let opts = parse_inline_options(["colour = red", "just text"].into_iter());
         assert!(opts.width.is_none());
         assert!(opts.alt.is_none());
+    }
+
+    #[test]
+    fn reads_a_theme_from_fence_attributes() {
+        assert_eq!(fence_theme("theme=forest").as_deref(), Some("forest"));
+        assert_eq!(fence_theme("theme=\"neutral\"").as_deref(), Some("neutral"));
+        assert_eq!(fence_theme("").as_deref(), None);
+        assert_eq!(fence_theme("other=1").as_deref(), None);
+    }
+
+    #[test]
+    fn splits_a_fence_into_language_and_attributes() {
+        let (lang, attrs, fence) = split_fence(" mermaid theme=forest ", "```");
+        assert_eq!(lang, "mermaid");
+        assert_eq!(attrs, "theme=forest");
+        assert_eq!(fence, "```");
+
+        let (lang, attrs, _) = split_fence("graph TD", "~~~");
+        assert_eq!(lang, "graph");
+        assert_eq!(attrs, "TD");
     }
 }

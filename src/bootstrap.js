@@ -43,8 +43,14 @@
   var prefixes = prefixesFor(detectRoot());
 
   function loadMermaid() {
-    var theme = localStorage.getItem("rustdoc-theme");
-    var dark = (theme === "dark" || theme === "ayu");
+    var rustdocTheme = localStorage.getItem("rustdoc-theme");
+    var followRustdoc = (rustdocTheme === "dark" || rustdocTheme === "ayu") ? "dark" : "default";
+
+    // A diagram may pin its own theme. Mermaid is initialised once per page, so
+    // the first pinned theme wins for every diagram on that page.
+    var pinned = document.querySelector("pre.mermaid[data-theme]");
+    var theme = pinned ? pinned.getAttribute("data-theme") : followRustdoc;
+
     var i = 0;
 
     function attempt() {
@@ -55,7 +61,7 @@
       var s = document.createElement("script");
       s.src = prefixes[i++] + "mermaid.min.js";
       s.onload = function () {
-        window.mermaid.initialize({ startOnLoad: false, theme: dark ? "dark" : "default" });
+        window.mermaid.initialize({ startOnLoad: false, theme: theme });
         window.mermaid.run();
       };
       s.onerror = attempt;

@@ -9,6 +9,11 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Added
 
+- `caption` on images, which wraps the picture in a `<figure>` with a
+  `<figcaption>`. Every image also carries `loading="lazy"` now.
+- Mermaid themes: `#[rsdoc::diagram(theme = "forest")]` pins a palette for the
+  page, and a fence can override it (`mermaid theme=neutral`). Without either,
+  diagrams keep following rustdoc's light/dark setting.
 - End-to-end browser tests. They build a rustdoc-shaped page, drop in the real
   bootstrap, render it in headless Chrome and assert on the DOM: Mermaid produces
   an `<svg>`, an image referenced from a nested page resolves one level up, and
