@@ -111,21 +111,47 @@ pub fn themed() {}
 a fence opening with `mermaid theme=neutral`. With neither, the diagram follows
 rustdoc's light/dark setting.
 
+### `badges!`
+
+A one-line row of links built from your package metadata — nothing to keep in
+sync by hand:
+
+```ignore
+#![doc = rsdoc::badges!()]
+```
+
+
+renders as:
+
+```text
+crates.io · docs.rs · source · v0.4.1 · MIT OR Apache-2.0
+```
+
+
+Links whose metadata is missing are skipped, so a crate without a `repository`
+field simply gets no source link.
+
 ### `mermaid!`
 
 Render a [Mermaid] diagram. Write the source inline as doc comments:
 
-    #[doc = rsdoc::mermaid!(
-    /// graph TD
-    ///   A[Start] --> B{Done?}
-    ///   B -->|yes| C[Ship it]
-    ///   B -->|no| D[Fix]
-    )]
-    pub fn test_function(){}
+```ignore
+#[doc = rsdoc::mermaid!(
+/// graph TD
+///   A[Start] --> B{Done?}
+///   B -->|yes| C[Ship it]
+///   B -->|no| D[Fix]
+)]
+pub fn test_function(){}
+```
+
 
 Or keep large diagrams in their own `.mmd` file:
 
-    #[doc = rsdoc::mermaid_file!("diagrams/flow.mmd")]
+```ignore
+#[doc = rsdoc::mermaid_file!("diagrams/flow.mmd")]
+```
+
 
 The diagram is emitted as a `<pre class="mermaid">` block and drawn by the
 browser. `mermaid.js` (v11) ships with this crate and is copied to
@@ -138,13 +164,16 @@ air-gapped machine. The theme follows rustdoc's light/dark setting.
 Wrap doc comments with `#[doc = plantuml!(...)]`. Use `plantuml` code blocks to write uml diagrams.
 In this way, you can directly use the Alt+D key to browse the UML diagram in the source code after installing the PlantUML plug-in
 
-    #[doc = rsdoc::plantuml!(
-    /// @startuml
-    /// !theme cyborg-outline
-    /// Bob -> Alice : hello
-    /// @enduml
-    )]
-    pub fn test_function(){}
+```ignore
+#[doc = rsdoc::plantuml!(
+/// @startuml
+/// !theme cyborg-outline
+/// Bob -> Alice : hello
+/// @enduml
+)]
+pub fn test_function(){}
+```
+
 
 By default PlantUML diagrams are rendered by requesting `plantuml.com`, so this
 macro does need network access at build time. To render locally instead, put a
@@ -155,40 +184,61 @@ leaves the machine.
 ### `plantuml_file!`
 Or you can directly attach the puml file stored as a file
     
-    #[doc = rsdoc::plantuml_file!(test.puml)]
+```ignore
+#[doc = rsdoc::plantuml_file!(test.puml)]
+```
+
 
 If your file is placed in a folder under the project directory, you can input the relative path directly like that.
 
-    #[doc = rsdoc::plantuml_file!(pumls/test.puml)]
+```ignore
+#[doc = rsdoc::plantuml_file!(pumls/test.puml)]
+```
+
 
 ### `image!`
 
 Attach any picture — PNG, JPEG or SVG:
 
-    #[doc = rsdoc::image!(test.png)]
+```ignore
+#[doc = rsdoc::image!(test.png)]
+```
+
 
 Relative paths inside the crate work as well:
 
-    #[doc = rsdoc::image!(images/schema.png)]
+```ignore
+#[doc = rsdoc::image!(images/schema.png)]
+```
+
 
 Control the rendered width and the alt text:
 
-    #[doc = rsdoc::image!("diagrams/arch.png", width = 600)]
-    #[doc = rsdoc::image!("diagrams/arch.png", width = "80%", alt = "System overview")]
+```ignore
+#[doc = rsdoc::image!("diagrams/arch.png", width = 600)]
+#[doc = rsdoc::image!("diagrams/arch.png", width = "80%", alt = "System overview")]
+```
+
 
 The same options work inside a fence:
 
-    #[rsdoc::diagram]
-    /// ```image
-    /// diagrams/arch.png
-    /// width = 600
-    /// alt = System overview
-    /// ```
-    pub fn architecture() {}
+```ignore
+#[rsdoc::diagram]
+/// ```image
+/// diagrams/arch.png
+/// width = 600
+/// alt = System overview
+/// ```
+pub fn architecture() {}
+```
+
 
 Add a caption and the picture becomes a `<figure>` with a `<figcaption>`:
 
-    #[doc = rsdoc::image!("diagrams/arch.png", caption = "Figure 1: system overview")]
+```ignore
+#[doc = rsdoc::image!("diagrams/arch.png", caption = "Figure 1: system overview")]
+```
+
 
 Every image is marked `loading="lazy"`, so pages with many of them open faster.
 
@@ -203,7 +253,10 @@ image, and drawio reopens it as the original diagram, because the source XML is
 stored in the SVG element's `content` attribute. There is no separate `.drawio`
 file to keep in sync.
 
-    #[doc = rsdoc::image!(diagrams/architecture.drawio.svg)]
+```ignore
+#[doc = rsdoc::image!(diagrams/architecture.drawio.svg)]
+```
+
 
 rsdoc does not re-render `.drawio` sources — export again after changing a
 diagram. To check that a file really carries its source:

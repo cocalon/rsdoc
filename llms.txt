@@ -91,6 +91,16 @@ A single fence overrides it with a trailing attribute — a fence opening of
 `mermaid theme=neutral`. Without either, the diagram follows rustdoc's light/dark
 setting.
 
+## Badges
+
+```rust
+#![doc = rsdoc::badges!()]
+```
+
+Emits `crates.io · docs.rs · source · vX.Y.Z · LICENSE`, all read from the
+package metadata (`CARGO_PKG_NAME`, `CARGO_PKG_REPOSITORY`, …). Missing fields
+are skipped.
+
 ## Common mistakes
 
 - The attribute is `diagram`, **not** `mermaid`. A proc-macro crate exports every

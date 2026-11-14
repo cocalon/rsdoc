@@ -300,6 +300,70 @@ fn save_image(img: &str, opts: &ImageOptions) -> String {
     format!("{body}\n\n{ASSET_BOOTSTRAP}")
 }
 
+/// Insert a one-line row of links to this crate's crates.io page, docs.rs page
+/// and repository, plus its version and license.
+///
+/// Everything comes from the package metadata Cargo sets while compiling, so
+/// there is nothing to keep in sync by hand:
+///
+/// ```ignore
+/// #![doc = rsdoc::badges!()]
+/// ```
+///
+/// renders as:
+///
+/// ```text
+/// crates.io · docs.rs · source · v0.4.1 · MIT OR Apache-2.0
+/// ```
+///
+/// Links that have no metadata behind them are omitted, so a crate without a
+/// `repository` field simply gets no source link.
+#[proc_macro]
+pub fn badges(_: proc_macro::TokenStream) -> proc_macro::TokenStream {
+    handle_error(|| {
+        let name = std::env::var("CARGO_PKG_NAME").unwrap_or_default();
+        let version = std::env::var("CARGO_PKG_VERSION").unwrap_or_default();
+        let repository = std::env::var("CARGO_PKG_REPOSITORY").unwrap_or_default();
+        let license = std::env::var("CARGO_PKG_LICENSE").unwrap_or_default();
+
+        let mut parts: Vec<String> = Vec::new();
+
+        if !name.is_empty() {
+            parts.push(format!(
+                "<a href=\"https://crates.io/crates/{name}\">crates.io</a>"
+            ));
+            parts.push(format!("<a href=\"https://docs.rs/{name}\">docs.rs</a>"));
+        }
+
+        if !repository.is_empty() {
+            parts.push(format!(
+                "<a href=\"{}\">source</a>",
+                html_escape(&repository)
+            ));
+        }
+
+        if !version.is_empty() {
+            parts.push(format!("v{}", html_escape(&version)));
+        }
+
+        if !license.is_empty() {
+            parts.push(html_escape(&license));
+        }
+
+        if parts.is_empty() {
+            return Ok(LitStr::new("", Span::call_site())
+                .into_token_stream()
+                .into());
+        }
+
+        let output = format!("<p class=\"rsdoc-badges\">{}</p>", parts.join(" · "));
+
+        Ok(LitStr::new(&output, Span::call_site())
+            .into_token_stream()
+            .into())
+    })
+}
+
 ///Attach pictures, such as PNG or SVG, you can do it this way
 /// #[doc = rsdoc::image!(test.png)]
 #[proc_macro]

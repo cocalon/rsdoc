@@ -9,6 +9,9 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Added
 
+- `badges!` emits a one-line row of links — `crates.io · docs.rs · source ·
+  vX.Y.Z · LICENSE` — built from the package metadata, so nothing has to be kept
+  in sync by hand. Metadata that is absent is simply skipped.
 - `caption` on images, which wraps the picture in a `<figure>` with a
   `<figcaption>`. Every image also carries `loading="lazy"` now.
 - Mermaid themes: `#[rsdoc::diagram(theme = "forest")]` pins a palette for the
