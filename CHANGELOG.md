@@ -9,6 +9,9 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Added
 
+- `llms.txt` at the crate root: syntax, gotchas and the diagnostics format on one
+  page, for AI agents and anything that wants to understand the crate without
+  reading the source.
 - A structural check for Mermaid source, run at build time. It catches a
   misspelled or unsupported diagram type (with a suggestion), a `graph` without a
   direction, unbalanced brackets or quotes, and a `subgraph` without `end`.
@@ -16,6 +19,11 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   Mermaid is drawn by the browser and a broken diagram does not fail the build.
 - `RSDOC_JSON=1` turns every diagnostic into one JSON object per line, so CI
   scripts and AI agents can parse failures instead of scraping prose.
+
+### Changed
+
+- Mermaid bracket errors quote the offending line:
+  ``line 2: `[` is never closed — `A[Start --> B[Done]` ``.
 - `include_mmd!("path")` and `include_puml!("path")` directives on their own line
   in a doc comment pull a diagram from a file instead of writing it inline. Paths
   resolve against the crate root, so a large diagram no longer drowns the item it

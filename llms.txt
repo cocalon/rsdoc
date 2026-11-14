@@ -1,0 +1,91 @@
+# rsdoc
+
+> Rust proc-macro that renders diagrams written in doc comments into rustdoc
+> output. Supports Mermaid (fully offline), PlantUML, and drawio/images.
+
+Requires Rust 1.71+.
+
+## Install
+
+```toml
+[dependencies]
+rsdoc = "0.4"
+```
+
+## Preferred: the `diagram` attribute
+
+```rust
+#[rsdoc::diagram]
+/// ```mermaid
+/// graph TD
+///   A[Start] --> B[Done]
+/// ```
+pub fn example() {}
+```
+
+Recognised fences: `mermaid`, `plantuml`, `image`, `drawio`. All other prose and
+code fences are passed through untouched.
+
+## Function-style macros
+
+```rust
+#[doc = rsdoc::mermaid!("graph TD\n  A --> B\n")]
+pub fn a() {}
+
+#[doc = rsdoc::plantuml!("@startuml\nAlice -> Bob\n@enduml\n")]
+pub fn b() {}
+
+#[doc = rsdoc::image!("diagrams/architecture.png")]
+pub fn c() {}
+```
+
+## Diagrams from files
+
+```rust
+#[rsdoc::diagram]
+/// include_mmd!("docs/flow.mmd")
+/// include_puml!("docs/sequence.puml")
+pub fn from_files() {}
+```
+
+Paths resolve against the crate root (`CARGO_MANIFEST_DIR`), not against the file
+the macro appears in.
+
+## Common mistakes
+
+- The attribute is `diagram`, **not** `mermaid`. A proc-macro crate exports every
+  macro into one namespace, so `#[rsdoc::mermaid]` would collide with the existing
+  `rsdoc::mermaid!`.
+- Mermaid source is checked for: a known diagram type, a direction after `graph`,
+  balanced brackets and quotes, and `subgraph`/`end` pairing. Other syntax errors
+  do not fail the build — the browser draws an error box instead.
+- PlantUML needs either a local `plantuml.jar` (via `RSDOC_PLANTUML_JAR`, or placed
+  next to `Cargo.toml`) or network access to plantuml.com.
+- Mermaid needs nothing at runtime: `mermaid.js` is bundled in the crate and
+  copied into the documentation root during the build.
+
+## Diagnostics
+
+Set `RSDOC_JSON=1` for one JSON object per line:
+
+```json
+{"tool":"rsdoc","level":"error","kind":"mermaid","message":"unrecognised diagram type `grap`, did you mean `graph`?","preview":"grap TD A --> B"}
+```
+
+Without it, warnings read
+`warning: rsdoc failed on `<source excerpt>` (<kind>): <reason>`.
+
+Every diagnostic quotes the diagram it refers to, because a `#[doc]` expansion
+carries no usable source location on stable Rust.
+
+## What each source needs
+
+| fence | runtime requirement | output |
+|---|---|---|
+| `mermaid` | none (bundled JS) | browser-drawn SVG |
+| `plantuml` | `plantuml.jar` or network | inline SVG |
+| `image` / `drawio` | file on disk | copied and referenced |
+
+For `.drawio.svg`, export from drawio with "Include a copy of my diagram" ticked:
+the file then carries both the rendered image and the editable source, so there
+is no separate `.drawio` file to keep in sync.

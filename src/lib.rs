@@ -923,7 +923,9 @@ fn validate_mermaid(src: &str) -> Vec<String> {
                 continue;
             }
             if let Some(issue) = unbalanced(line) {
-                problems.push(format!("line {}: {issue}", index + 1));
+                // Quote the offending line so the reader (human or agent) does
+                // not have to count lines to find it.
+                problems.push(format!("line {}: {issue} — `{line}`", index + 1));
             }
         }
 
