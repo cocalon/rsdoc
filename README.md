@@ -189,6 +189,28 @@ alongside it.
  - The bundled `mermaid.js` adds roughly 3.4 MiB to the crate. It is written to
    the documentation root once per build tree, not embedded into every page.
 
+### Mermaid syntax check
+
+Mermaid is drawn by the browser, so a syntax error would otherwise stay invisible
+until someone opens the documentation. rsdoc runs a lightweight structural check
+during the build and reports what it finds:
+
+```text
+warning: rsdoc failed on `grap TD A --> B` (mermaid):
+         unrecognised diagram type `grap`, did you mean `graph`?
+warning: rsdoc failed on `graph A --> B` (mermaid):
+         `graph` needs a direction (TD, TB, BT, LR or RL), found ``
+warning: rsdoc failed on `graph TD A[Start --> B[Done]` (mermaid):
+         line 2: `[` is never closed
+```
+
+It covers a misspelled or unsupported diagram type, a `graph` with no direction,
+unbalanced brackets or quotes, and a `subgraph` without `end`. Problems are
+reported but never block rendering.
+
+This is deliberately not a full parser — it will not tell you that a layout looks
+wrong, only that the source cannot be right.
+
 ### For scripts and AI agents
 
 Set `RSDOC_JSON=1` and every diagnostic becomes one JSON object per line instead

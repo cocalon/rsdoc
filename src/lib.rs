@@ -782,8 +782,178 @@ fn html_escape(input: &str) -> String {
     out
 }
 
+/// Diagram-type keywords Mermaid accepts as the first word of a diagram.
+///
+/// Matching is case-sensitive on purpose: `sequencediagram` really is a syntax
+/// error in Mermaid, and catching that is half the point of this check.
+const MERMAID_KINDS: &[&str] = &[
+    "graph",
+    "flowchart",
+    "sequenceDiagram",
+    "classDiagram",
+    "stateDiagram",
+    "stateDiagram-v2",
+    "erDiagram",
+    "journey",
+    "gantt",
+    "pie",
+    "gitGraph",
+    "mindmap",
+    "timeline",
+    "quadrantChart",
+    "requirementDiagram",
+    "sankey-beta",
+    "xychart-beta",
+    "block-beta",
+    "architecture-beta",
+    "packet-beta",
+    "C4Context",
+    "C4Container",
+    "C4Component",
+    "C4Dynamic",
+    "C4Deployment",
+];
+
+/// Levenshtein distance, capped by the caller.
+fn edit_distance(a: &str, b: &str) -> usize {
+    let a: Vec<char> = a.chars().collect();
+    let b: Vec<char> = b.chars().collect();
+    let mut previous: Vec<usize> = (0..=b.len()).collect();
+
+    for i in 1..=a.len() {
+        let mut current = vec![i];
+        for j in 1..=b.len() {
+            let substitution = previous[j - 1] + usize::from(a[i - 1] != b[j - 1]);
+            current.push((previous[j] + 1).min(current[j - 1] + 1).min(substitution));
+        }
+        previous = current;
+    }
+
+    previous[b.len()]
+}
+
+/// Report the first bracket or quote problem on a line, ignoring anything inside
+/// a quoted label such as `A["a [b] c"]`.
+fn unbalanced(line: &str) -> Option<String> {
+    let mut in_quote = false;
+    let mut stack: Vec<char> = Vec::new();
+
+    for ch in line.chars() {
+        match ch {
+            '"' => in_quote = !in_quote,
+            _ if in_quote => {}
+            '[' | '(' | '{' => stack.push(ch),
+            ']' | ')' | '}' => {
+                let want = match ch {
+                    ']' => '[',
+                    ')' => '(',
+                    _ => '{',
+                };
+                match stack.pop() {
+                    Some(open) if open == want => {}
+                    _ => return Some(format!("`{ch}` closes nothing")),
+                }
+            }
+            _ => {}
+        }
+    }
+
+    if in_quote {
+        return Some("unterminated quote".to_string());
+    }
+
+    stack
+        .first()
+        .map(|open| format!("`{open}` is never closed"))
+}
+
+/// Sanity-check Mermaid source before handing it to the browser.
+///
+/// A real parser runs to tens of thousands of lines, which is out of proportion
+/// for a build step. These checks cover what actually goes wrong when writing a
+/// diagram by hand: a misspelled type, a `graph` with no direction, unbalanced
+/// brackets, and a `subgraph` without `end`.
+///
+/// Problems are reported but never block rendering — the browser may still draw
+/// something useful, so the block is emitted either way.
+fn validate_mermaid(src: &str) -> Vec<String> {
+    let mut problems = Vec::new();
+
+    let header = src
+        .lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty() && !line.starts_with("%%"));
+
+    let header = match header {
+        Some(header) => header,
+        None => {
+            problems.push("the diagram is empty".to_string());
+            return problems;
+        }
+    };
+
+    let keyword = header.split_whitespace().next().unwrap_or("");
+    let kind = match MERMAID_KINDS.iter().find(|known| **known == keyword) {
+        Some(kind) => *kind,
+        None => {
+            let suggestion = MERMAID_KINDS
+                .iter()
+                .map(|known| (*known, edit_distance(known, keyword)))
+                .filter(|(_, distance)| *distance <= 2)
+                .min_by_key(|(_, distance)| *distance)
+                .map(|(known, _)| format!(", did you mean `{known}`?"))
+                .unwrap_or_default();
+
+            problems.push(format!("unrecognised diagram type `{keyword}`{suggestion}"));
+            return problems; // nothing else is meaningful without a known grammar
+        }
+    };
+
+    if kind == "graph" || kind == "flowchart" {
+        let direction = header.split_whitespace().nth(1).unwrap_or("");
+        if !matches!(direction, "TD" | "TB" | "BT" | "LR" | "RL") {
+            problems.push(format!(
+                "`{kind}` needs a direction (TD, TB, BT, LR or RL), found `{direction}`"
+            ));
+        }
+
+        for (index, line) in src.lines().enumerate() {
+            let line = line.trim();
+            if line.is_empty() || line.starts_with("%%") {
+                continue;
+            }
+            if let Some(issue) = unbalanced(line) {
+                problems.push(format!("line {}: {issue}", index + 1));
+            }
+        }
+
+        let mut open = 0i32;
+        for line in src.lines() {
+            let line = line.trim();
+            if line.starts_with("subgraph") {
+                open += 1;
+            } else if line == "end" {
+                if open == 0 {
+                    problems.push("`end` without a matching `subgraph`".to_string());
+                } else {
+                    open -= 1;
+                }
+            }
+        }
+        if open > 0 {
+            problems.push(format!("{open} `subgraph` without `end`"));
+        }
+    }
+
+    problems
+}
+
 fn save_mermaid(mermaid_str: &str) -> String {
     ensure_mermaid_asset();
+
+    for problem in validate_mermaid(mermaid_str) {
+        report("mermaid", &problem, &preview(mermaid_str));
+    }
 
     let mut output = String::new();
     output.push_str("<pre class=\"mermaid\">\n");
@@ -1180,5 +1350,73 @@ mod tests {
             Some("something unexpected happened")
         );
         assert_eq!(summarize_plantuml_error("\n  \n"), None);
+    }
+
+    #[test]
+    fn accepts_a_well_formed_flowchart() {
+        let src = "graph TD\n  A[Start] --> B{Done?}\n  B -->|yes| C[Ship]\n";
+        assert_eq!(validate_mermaid(src), Vec::<String>::new());
+
+        let seq = "sequenceDiagram\n  Alice->>Bob: hi\n";
+        assert_eq!(validate_mermaid(seq), Vec::<String>::new());
+    }
+
+    #[test]
+    fn suggests_a_correction_for_a_misspelled_type() {
+        let problems = validate_mermaid("grap TD\n  A --> B");
+        assert_eq!(problems.len(), 1, "{problems:?}");
+        assert!(problems[0].contains("did you mean `graph`"), "{problems:?}");
+    }
+
+    #[test]
+    fn rejects_case_mismatched_keywords() {
+        // `sequencediagram` is not the same as `sequenceDiagram`.
+        let problems = validate_mermaid("sequencediagram\n  A->>B: hi");
+        assert!(
+            problems[0].contains("unrecognised diagram type"),
+            "{problems:?}"
+        );
+    }
+
+    #[test]
+    fn requires_a_direction_after_graph() {
+        let problems = validate_mermaid("graph\n  A --> B");
+        assert!(
+            problems.iter().any(|p| p.contains("needs a direction")),
+            "{problems:?}"
+        );
+    }
+
+    #[test]
+    fn reports_unbalanced_brackets() {
+        let problems = validate_mermaid("graph TD\n  A[Start --> B[Done]");
+        assert!(
+            problems.iter().any(|p| p.contains("never closed")),
+            "{problems:?}"
+        );
+    }
+
+    #[test]
+    fn ignores_brackets_inside_quoted_labels() {
+        let src = "graph TD\n  A[\"a [b] c\"] --> B\n";
+        assert_eq!(validate_mermaid(src), Vec::<String>::new());
+    }
+
+    #[test]
+    fn reports_subgraph_without_end() {
+        let src = "graph TD\n  subgraph one\n  A --> B\n";
+        let problems = validate_mermaid(src);
+        assert!(
+            problems.iter().any(|p| p.contains("without `end`")),
+            "{problems:?}"
+        );
+    }
+
+    #[test]
+    fn rejects_an_empty_diagram() {
+        assert_eq!(
+            validate_mermaid("   \n\n"),
+            vec!["the diagram is empty".to_string()]
+        );
     }
 }

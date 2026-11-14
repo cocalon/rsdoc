@@ -9,6 +9,11 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Added
 
+- A structural check for Mermaid source, run at build time. It catches a
+  misspelled or unsupported diagram type (with a suggestion), a `graph` without a
+  direction, unbalanced brackets or quotes, and a `subgraph` without `end`.
+  Previously these stayed invisible until someone opened the rendered docs, since
+  Mermaid is drawn by the browser and a broken diagram does not fail the build.
 - `RSDOC_JSON=1` turns every diagnostic into one JSON object per line, so CI
   scripts and AI agents can parse failures instead of scraping prose.
 - `include_mmd!("path")` and `include_puml!("path")` directives on their own line
