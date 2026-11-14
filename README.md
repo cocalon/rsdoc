@@ -5,8 +5,8 @@ Write a diagram in a doc comment, get an image in your rustdoc output.
 Mermaid, PlantUML, drawio and plain images — one attribute, no server, and
 Mermaid that renders with **no network access at all**.
 
-<img src="https://raw.githubusercontent.com/cocalon/rsdoc/main/example-mermaid.png"
-   alt="A fenced mermaid block, and what rustdoc renders from it" width="820">
+<img src="https://raw.githubusercontent.com/cocalon/rsdoc/main/images/preview-attribute.png"
+   alt="A fenced mermaid block in a doc comment, and the diagram rustdoc renders from it" style="max-width:100%">
 
 ## Quick start
 
@@ -95,6 +95,9 @@ pub fn architecture() {}
 pub fn themed() {}
 ````
 
+<img src="https://raw.githubusercontent.com/cocalon/rsdoc/main/images/preview-theme.png"
+   alt="The same flowchart rendered with the forest palette" style="max-width:100%">
+
 `theme` accepts any Mermaid palette — `default`, `dark`, `forest`, `neutral`,
 `base`. A single block can override it by appending the theme to the fence, as in
 a fence opening with `mermaid theme=neutral`. With neither, the diagram follows
@@ -119,6 +122,9 @@ pub fn test_function() {}
 ```ignore
 #[doc = rsdoc::mermaid_file!("diagrams/flow.mmd")]
 ```
+
+<img src="https://raw.githubusercontent.com/cocalon/rsdoc/main/images/preview-mermaid.png"
+   alt="A flowchart drawn by the bundled Mermaid engine, with no network access" style="max-width:100%">
 
 The diagram is emitted as a `<pre class="mermaid">` block and drawn by the
 browser. `mermaid.js` (v11) is copied to `target/doc/mermaid.min.js` during the
@@ -147,8 +153,8 @@ build time. To render locally, put a `plantuml.jar` next to `Cargo.toml` or poin
 -pipe` and nothing leaves the machine. Rendered output is cached, so a rebuild
 does not start the JVM again for a diagram that has not changed.
 
-<img src="https://raw.githubusercontent.com/cocalon/rsdoc/main/rsdoc_example.png"
-   alt="A PlantUML block in a doc comment, and the rendered diagram" width="820">
+<img src="https://raw.githubusercontent.com/cocalon/rsdoc/main/images/preview-plantuml.png"
+   alt="A PlantUML sequence diagram rendered inline in rustdoc" style="max-width:100%">
 
 ## Images and drawio
 
@@ -178,6 +184,9 @@ The same options work inside a fence, one `key = value` per line:
 /// ```
 pub fn architecture() {}
 ````
+
+<img src="https://raw.githubusercontent.com/cocalon/rsdoc/main/images/preview-image.png"
+   alt="An image scaled to 320px with a caption underneath" style="max-width:100%">
 
 A `caption` turns the picture into a `<figure>` with a `<figcaption>`. Every
 image is marked `loading="lazy"`, so a page with dozens of screenshots does not
@@ -239,6 +248,9 @@ A coloured callout for deprecation or migration notices:
 #[doc = rsdoc::notice!(warning, "This crate is unmaintained. Use `newcrate` instead.")]
 ```
 
+<img src="https://raw.githubusercontent.com/cocalon/rsdoc/main/images/preview-notice.png"
+   alt="The three notice levels: warning in yellow, info in blue, danger in red" style="max-width:100%">
+
 Three levels — `info`, `warning` and `danger` — styled inline, so they look the
 same in every rustdoc theme without shipping a stylesheet. Backticks in the body
 become `<code>`; everything else is escaped.
@@ -282,24 +294,28 @@ excerpt is the only way to tell which one failed.
 
 ## How it compares
 
-Two other crates solve overlapping problems. An honest comparison:
+Two other crates solve overlapping problems. This reflects November 2026;
+corrections welcome.
 
 |  | rsdoc | [aquamarine] | [simple-mermaid] |
 |---|---|---|---|
-| Maintenance | active | **unmaintained** | active |
-| Mermaid | bundled, renders offline | bundled | loaded from a CDN |
+| Mermaid | bundled, works offline | bundled, works offline | loaded from a CDN |
 | PlantUML | local jar or plantuml.com | — | — |
-| Drawio / images | ✓ | — | — |
-| Inline code block | ✓ | ✓ | — (files only) |
-| Diagram from file | `include_mmd!` / `include_puml!` | `include_mmd!` | ✓ |
-| Dependencies | six | several | **zero** |
+| drawio / images | ✓ | — | — |
+| Fenced block in the doc | ✓ | ✓ | — (files only) |
+| Diagram from a file | ✓ | ✓ (must be last in the block) | ✓ |
+| Maintenance | active | **seeking a maintainer** | active |
 
-**Use simple-mermaid** if Mermaid from files is all you need and you want zero
-dependencies. It is smaller, and it does one thing well.
+**aquamarine** does the same job for Mermaid, and does it well — it bundles the
+engine too, so it works offline as well. Its README says it is looking for a
+maintainer; that is the only reason it appears that way above.
 
-**Use rsdoc** if you need PlantUML, drawio, diagrams written inline, or Mermaid
-that renders with no network access at all — for intranet docs, archives, or
-anything that has to survive without a CDN.
+**simple-mermaid** is the smallest of the three and the least intrusive if all you
+want is a `.mmd` file rendered into your docs.
+
+**rsdoc** earns its extra size when you need PlantUML, drawio, diagrams written
+inline *and* from files in the same crate, or one attribute that handles all of
+them.
 
 ## Tips
 
