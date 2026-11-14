@@ -35,6 +35,20 @@ jobs:
       - name: Test
         run: cargo test --lib
 
+      - name: End-to-end browser checks
+        # These render a page in Chrome and assert on the resulting DOM. If no
+        # Chrome is present they skip and pass, so surface that as a warning
+        # rather than letting it hide silently.
+        run: |
+          if command -v google-chrome >/dev/null 2>&1; then
+            echo "using $(google-chrome --version)"
+          elif command -v chromium >/dev/null 2>&1; then
+            echo "using $(chromium --version)"
+          else
+            echo "::warning::no Chrome/Chromium found; browser tests will skip"
+          fi
+          cargo test --test e2e
+
       - name: Build documentation
         run: cargo doc --no-deps
 

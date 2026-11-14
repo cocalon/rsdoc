@@ -9,6 +9,11 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Added
 
+- End-to-end browser tests. They build a rustdoc-shaped page, drop in the real
+  bootstrap, render it in headless Chrome and assert on the DOM: Mermaid produces
+  an `<svg>`, an image referenced from a nested page resolves one level up, and
+  the width-constraining style is present. Previously every "it renders" claim
+  was checked by hand and nothing in CI would have caught a break.
 - `image!` accepts `width` and `alt`:
   `image!("diagrams/arch.png", width = 600)`. The same options work as
   `key = value` lines inside an `image` or `drawio` fence, and `width` takes
@@ -27,6 +32,9 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Changed
 
+- The injected bootstrap now lives in `src/bootstrap.js` and is pulled in with
+  `include_str!`, so the end-to-end tests load the exact bytes the macro emits
+  instead of a copy that could drift.
 - Mermaid bracket errors quote the offending line:
   ``line 2: `[` is never closed — `A[Start --> B[Done]` ``.
 - `include_mmd!("path")` and `include_puml!("path")` directives on their own line
