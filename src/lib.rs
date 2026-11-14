@@ -270,10 +270,90 @@ const ASSET_BOOTSTRAP: &str = r#"<script>
 </script>
 "#;
 
+/// Optional presentation settings for an image reference.
+#[derive(Default)]
+struct ImageOptions {
+    width: Option<String>,
+    alt: Option<String>,
+}
+
+/// Parse `image!("path.png", width = 600, alt = "…")`.
+///
+/// Returns `None` for the bare-token form (`image!(path.png)`) that older
+/// versions accepted, so both spellings keep working.
+fn parse_image_args(tokens: proc_macro::TokenStream) -> Option<(String, ImageOptions)> {
+    use syn::parse::Parser as _;
+
+    let parser = |input: syn::parse::ParseStream<'_>| -> Result<(String, ImageOptions)> {
+        let path: LitStr = input.parse()?;
+        let mut opts = ImageOptions::default();
+
+        while input.peek(syn::Token![,]) {
+            input.parse::<syn::Token![,]>()?;
+            if input.is_empty() {
+                break;
+            }
+
+            let key: syn::Ident = input.parse()?;
+            input.parse::<syn::Token![=]>()?;
+
+            match key.to_string().as_str() {
+                "width" => {
+                    let value: syn::Lit = input.parse()?;
+                    opts.width = Some(match value {
+                        syn::Lit::Int(int) => int.base10_digits().to_string(),
+                        syn::Lit::Str(s) => s.value(),
+                        _ => {
+                            return Err(Error::new(
+                                key.span(),
+                                "width must be a number or a string such as \"80%\"",
+                            ))
+                        }
+                    });
+                }
+                "alt" => {
+                    let value: LitStr = input.parse()?;
+                    opts.alt = Some(value.value());
+                }
+                other => {
+                    return Err(Error::new(
+                        key.span(),
+                        format!("unknown option `{other}`; expected `width` or `alt`"),
+                    ))
+                }
+            }
+        }
+
+        Ok((path.value(), opts))
+    };
+
+    parser.parse(tokens).ok()
+}
+
+/// Read `key = value` lines from the body of an `image` / `drawio` fence.
+fn parse_inline_options<'a>(lines: impl Iterator<Item = &'a str>) -> ImageOptions {
+    let mut opts = ImageOptions::default();
+
+    for line in lines {
+        let Some((key, value)) = line.split_once('=') else {
+            continue;
+        };
+
+        let value = value.trim().trim_matches('"').to_string();
+        match key.trim() {
+            "width" => opts.width = Some(value),
+            "alt" => opts.alt = Some(value),
+            _ => {}
+        }
+    }
+
+    opts
+}
+
 /// Copy `img` into the documentation's `images/` directory and return the markup
 /// that references it. Shared by `image!` and by the `image` / `drawio` fences of
 /// the `diagram` attribute.
-fn save_image(img: &str) -> String {
+fn save_image(img: &str, opts: &ImageOptions) -> String {
     let dest = doc_dir().join("images").join(img);
 
     if let Some(prefix) = dest.parent() {
@@ -292,20 +372,32 @@ fn save_image(img: &str) -> String {
         );
     }
 
+    let alt = html_escape(opts.alt.as_deref().unwrap_or(img));
+    let width = match &opts.width {
+        Some(width) => format!(" width=\"{}\"", html_escape(width)),
+        None => String::new(),
+    };
+
     // The blank line matters: without it markdown treats the <img> and the
     // <script> as one HTML block, which then ends at the first blank line
     // inside the script — leaving the rest of the JS to be parsed as prose.
-    format!("<p><img data-rsdoc-src=\"images/{img}\" alt=\"{img}\"/></p>\n\n{ASSET_BOOTSTRAP}")
+    format!(
+        "<p><img data-rsdoc-src=\"images/{img}\" alt=\"{alt}\"{width}/></p>\n\n{ASSET_BOOTSTRAP}"
+    )
 }
 
 ///Attach pictures, such as PNG or SVG, you can do it this way
 /// #[doc = rsdoc::image!(test.png)]
 #[proc_macro]
 pub fn image(img: proc_macro::TokenStream) -> proc_macro::TokenStream {
-    let img = arg_to_path(img);
+    let (path, opts) = match parse_image_args(img.clone()) {
+        Some(parsed) => parsed,
+        // Older spelling: `image!(path/to/file.png)` with no quotes or options.
+        None => (arg_to_path(img), ImageOptions::default()),
+    };
 
     handle_error(|| {
-        let output = save_image(&img);
+        let output = save_image(&path, &opts);
 
         Ok(LitStr::new(&output, Span::call_site())
             .into_token_stream()
@@ -1152,18 +1244,22 @@ fn transform_doc_lines(lines: &[String]) -> String {
 
         let html = match lang.as_str() {
             "mermaid" => save_mermaid(&body),
-            // `image` and `drawio` fences hold a single path.
+            // `image` and `drawio` fences hold a path, optionally followed by
+            // `width = …` or `alt = …` lines.
             "image" | "drawio" => {
-                let path = body
-                    .lines()
-                    .map(str::trim)
-                    .find(|l| !l.is_empty())
-                    .unwrap_or("");
+                let mut rest = body.lines().map(str::trim).filter(|l| !l.is_empty());
+                let path = rest.next().unwrap_or("");
+                let opts = parse_inline_options(rest);
+
                 if path.is_empty() {
-                    report(&lang, "empty block, expected a single path", "(empty)");
+                    report(
+                        &lang,
+                        "empty block, expected a path on the first line",
+                        "(empty)",
+                    );
                     String::new()
                 } else {
-                    save_image(path)
+                    save_image(path, &opts)
                 }
             }
             _ => save_plantuml(&wrap_plantuml(body)),
@@ -1420,5 +1516,25 @@ mod tests {
             validate_mermaid("   \n\n"),
             vec!["the diagram is empty".to_string()]
         );
+    }
+
+    #[test]
+    fn parses_inline_image_options() {
+        let opts = parse_inline_options(["width = 320", "alt = Diagram from a fence"].into_iter());
+        assert_eq!(opts.width.as_deref(), Some("320"));
+        assert_eq!(opts.alt.as_deref(), Some("Diagram from a fence"));
+    }
+
+    #[test]
+    fn keeps_quotes_off_inline_option_values() {
+        let opts = parse_inline_options(["width = \"80%\""].into_iter());
+        assert_eq!(opts.width.as_deref(), Some("80%"));
+    }
+
+    #[test]
+    fn ignores_unknown_inline_options() {
+        let opts = parse_inline_options(["colour = red", "just text"].into_iter());
+        assert!(opts.width.is_none());
+        assert!(opts.alt.is_none());
     }
 }

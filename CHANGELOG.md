@@ -9,6 +9,11 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Added
 
+- `image!` accepts `width` and `alt`:
+  `image!("diagrams/arch.png", width = 600)`. The same options work as
+  `key = value` lines inside an `image` or `drawio` fence, and `width` takes
+  either a pixel count or a string such as `"80%"`. Previously every picture was
+  rendered at its natural size with the file name as alt text.
 - `llms.txt` at the crate root: syntax, gotchas and the diagnostics format on one
   page, for AI agents and anything that wants to understand the crate without
   reading the source.

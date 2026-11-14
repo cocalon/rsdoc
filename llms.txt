@@ -51,6 +51,25 @@ pub fn from_files() {}
 Paths resolve against the crate root (`CARGO_MANIFEST_DIR`), not against the file
 the macro appears in.
 
+## Image sizing and alt text
+
+```rust
+#[doc = rsdoc::image!("diagrams/arch.png", width = 600)]
+#[doc = rsdoc::image!("diagrams/arch.png", width = "80%", alt = "System overview")]
+```
+
+Or inside a fence, one `key = value` per line:
+
+```rust
+#[rsdoc::diagram]
+/// ```image
+/// diagrams/arch.png
+/// width = 600
+/// alt = System overview
+/// ```
+pub fn architecture() {}
+```
+
 ## Common mistakes
 
 - The attribute is `diagram`, **not** `mermaid`. A proc-macro crate exports every

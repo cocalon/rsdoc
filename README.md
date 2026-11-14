@@ -155,6 +155,21 @@ Relative paths inside the crate work as well:
 
     #[doc = rsdoc::image!(images/schema.png)]
 
+Control the rendered width and the alt text:
+
+    #[doc = rsdoc::image!("diagrams/arch.png", width = 600)]
+    #[doc = rsdoc::image!("diagrams/arch.png", width = "80%", alt = "System overview")]
+
+The same options work inside a fence:
+
+    #[rsdoc::diagram]
+    /// ```image
+    /// diagrams/arch.png
+    /// width = 600
+    /// alt = System overview
+    /// ```
+    pub fn architecture() {}
+
 #### Drawio
 
 `image!` works with drawio's *editable vector image* format. In drawio pick
