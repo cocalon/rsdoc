@@ -9,6 +9,8 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Added
 
+- `RSDOC_JSON=1` turns every diagnostic into one JSON object per line, so CI
+  scripts and AI agents can parse failures instead of scraping prose.
 - `include_mmd!("path")` and `include_puml!("path")` directives on their own line
   in a doc comment pull a diagram from a file instead of writing it inline. Paths
   resolve against the crate root, so a large diagram no longer drowns the item it
@@ -20,6 +22,11 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   local jar was involved. Previously the output was
   `could not render the diagram: <reason>` with no way to tell which one, which
   is useless in a crate with dozens of them.
+- PlantUML's stderr is captured instead of discarded, so a syntax error reads
+  `syntax error at line 3: Syntax Error?` rather than a bare exit code. (PlantUML
+  exits with 200 on syntax errors, which was previously the entire message.)
+- A diagram rejected by plantuml.com (HTTP 400) no longer suggests installing a
+  local jar; that hint only appears when the network is really the problem.
 
 ## [0.4.1] - 2026-11-12
 

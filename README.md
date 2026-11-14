@@ -11,6 +11,30 @@ into images inside your rustdoc output.
 
 *Requires Rust version 1.71 or later.*
 
+## How it compares
+
+Two other crates solve overlapping problems. An honest comparison:
+
+|  | rsdoc | [aquamarine] | [simple-mermaid] |
+|---|---|---|---|
+| Maintenance | active | **unmaintained** | active |
+| Mermaid | bundled, renders offline | bundled | loaded from a CDN |
+| PlantUML | local jar or plantuml.com | — | — |
+| Drawio / images | ✓ | — | — |
+| Inline code block | ✓ | ✓ | — (files only) |
+| Diagram from file | `include_mmd!` / `include_puml!` | `include_mmd!` | ✓ |
+| Dependencies | six | several | **zero** |
+
+**Use simple-mermaid** if Mermaid from files is all you need and you want zero
+dependencies. It is smaller, and it does one thing well.
+
+**Use rsdoc** if you need PlantUML, Drawio, diagrams written inline, or Mermaid
+that renders with no network access at all — for intranet docs, archives, or
+anything that has to survive without a CDN.
+
+[aquamarine]: https://crates.io/crates/aquamarine
+[simple-mermaid]: https://crates.io/crates/simple-mermaid
+
 [Mermaid]: https://mermaid.js.org/
 [`drawio`]: https://drawio-app.com/
 [`plantuml`]: https://www.plantuml.com/
@@ -164,6 +188,19 @@ alongside it.
    documentation builds.
  - The bundled `mermaid.js` adds roughly 3.4 MiB to the crate. It is written to
    the documentation root once per build tree, not embedded into every page.
+
+### For scripts and AI agents
+
+Set `RSDOC_JSON=1` and every diagnostic becomes one JSON object per line instead
+of prose:
+
+```json
+{"tool":"rsdoc","level":"error","kind":"plantuml","message":"syntax error at line 3: Syntax Error?","preview":"@startuml Alice -> Bob : hello ThisLineIsNotVali…"}
+```
+
+Every failure also names the diagram that broke. A `#[doc]` expansion carries no
+usable source location on stable Rust, so in a crate with dozens of diagrams the
+source excerpt is the only way to tell which one failed.
 
 ### How asset paths are resolved
 

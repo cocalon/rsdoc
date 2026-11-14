@@ -281,10 +281,14 @@ fn save_image(img: &str) -> String {
     }
 
     if let Err(e) = fs::copy(img, &dest) {
-        println!(
-            "warning: rsdoc could not copy `{img}` into the documentation: {e}\n\
-             note: image paths are resolved relative to {}, not to the source file",
-            std::env::var("CARGO_MANIFEST_DIR").unwrap_or_else(|_| ".".to_string())
+        report(
+            "image",
+            &format!(
+                "could not copy into the documentation: {e} (paths are resolved relative to {}, \
+                 not to the source file)",
+                std::env::var("CARGO_MANIFEST_DIR").unwrap_or_else(|_| ".".to_string())
+            ),
+            img,
         );
     }
 
@@ -384,7 +388,7 @@ fn render_with_jar(jar: &std::path::Path, uml_str: &str) -> std::result::Result<
         .arg("-pipe")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
-        .stderr(Stdio::null())
+        .stderr(Stdio::piped())
         .spawn()
         .map_err(|e| {
             if e.kind() == std::io::ErrorKind::NotFound {
@@ -409,10 +413,13 @@ fn render_with_jar(jar: &std::path::Path, uml_str: &str) -> std::result::Result<
         .map_err(|e| format!("waiting for plantuml failed: {e}"))?;
 
     if !out.status.success() {
-        return Err(format!(
-            "plantuml exited with {} — check the diagram syntax",
-            out.status
-        ));
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        // PlantUML exits with 200 on a syntax error, which reads as nonsense in
+        // a message, so prefer the parsed reason whenever there is one.
+        return Err(match summarize_plantuml_error(&stderr) {
+            Some(detail) => detail,
+            None => format!("plantuml exited with {}", out.status),
+        });
     }
 
     let svg = String::from_utf8(out.stdout)
@@ -442,6 +449,83 @@ fn preview(src: &str) -> String {
     }
 }
 
+/// Escape a string for embedding in a JSON string literal.
+fn json_escape(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+
+    for ch in s.chars() {
+        match ch {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            c if (c as u32) < 0x20 => out.push_str(&format!("\\u{:04x}", c as u32)),
+            c => out.push(c),
+        }
+    }
+
+    out
+}
+
+/// Report a diagram that could not be rendered.
+///
+/// With `RSDOC_JSON` set, each diagnostic is one JSON object per line, which lets
+/// CI scripts and AI agents parse the failure instead of scraping prose. Without
+/// it, this is an ordinary warning aimed at a human.
+fn report(kind: &str, message: &str, preview: &str) {
+    if std::env::var_os("RSDOC_JSON").is_some() {
+        println!(
+            r#"{{"tool":"rsdoc","level":"error","kind":"{}","message":"{}","preview":"{}"}}"#,
+            json_escape(kind),
+            json_escape(message),
+            json_escape(preview)
+        );
+    } else {
+        println!("warning: rsdoc failed on `{preview}` ({kind}): {message}");
+    }
+}
+
+/// Pull a useful message out of PlantUML's diagnostics.
+///
+/// In `-pipe` mode PlantUML reports a syntax error on four lines:
+///
+/// ```text
+/// ERROR
+/// 2
+/// Syntax Error?
+/// Some diagram description contains errors
+/// ```
+///
+/// and still writes an "error image" to stdout with exit code 200. Only the line
+/// number and reason matter, so those two are recombined into one sentence.
+fn summarize_plantuml_error(stderr: &str) -> Option<String> {
+    let lines: Vec<&str> = stderr
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .collect();
+
+    // "ERROR" / "<line number>" / "<reason>"
+    if lines.len() >= 3
+        && lines[0].eq_ignore_ascii_case("ERROR")
+        && !lines[1].is_empty()
+        && lines[1].chars().all(|c| c.is_ascii_digit())
+    {
+        return Some(format!("syntax error at line {}: {}", lines[1], lines[2]));
+    }
+
+    // Older servers phrase it as "Error line N in file: ..." on one line.
+    if let Some(line) = lines
+        .iter()
+        .find(|line| line.to_ascii_lowercase().contains("error line"))
+    {
+        return Some((*line).to_string());
+    }
+
+    lines.first().map(|line| (*line).to_string())
+}
+
 fn render_svg_cached(hash: &str, uml_str: &str) -> String {
     let cache = cache_dir().join(format!("{hash}.svg"));
 
@@ -455,28 +539,30 @@ fn render_svg_cached(hash: &str, uml_str: &str) -> String {
         Some(jar) => match render_with_jar(&jar, uml_str) {
             Ok(svg) => svg,
             Err(reason) => {
-                println!(
-                    "warning: rsdoc could not render `{}` with `{}`: {reason}\n\
-                     falling back to plantuml.com",
-                    preview(uml_str),
-                    jar.display()
+                // The jar failed, but the diagram may still render remotely.
+                report(
+                    "plantuml",
+                    &format!(
+                        "{reason} (jar: {}), falling back to plantuml.com",
+                        jar.display()
+                    ),
+                    &preview(uml_str),
                 );
                 download_puml_svg(uml_str).unwrap_or_else(|e| {
-                    println!(
-                        "warning: rsdoc could not render `{}`: {e}",
-                        preview(uml_str)
-                    );
+                    report("plantuml", &e, &preview(uml_str));
                     String::new()
                 })
             }
         },
         None => download_puml_svg(uml_str).unwrap_or_else(|e| {
-            println!(
-                "warning: rsdoc could not render `{}`: {e}\n\
-                 note: place a `plantuml.jar` next to Cargo.toml, or set RSDOC_PLANTUML_JAR, \
-                 to render without network access",
-                preview(uml_str)
-            );
+            // Only suggest the jar when the network is the problem. On a syntax
+            // error it would send the reader down the wrong path.
+            let hint = if e.contains("syntax") || e.contains("400") {
+                ""
+            } else {
+                " (a local plantuml.jar via RSDOC_PLANTUML_JAR avoids the network)"
+            };
+            report("plantuml", &format!("{e}{hint}"), &preview(uml_str));
             String::new()
         }),
     };
@@ -607,10 +693,21 @@ fn download_puml_svg(puml_str: &str) -> std::result::Result<String, String> {
         .timeout_write(Duration::from_secs(5))
         .build();
 
-    let response = agent
-        .get(&url)
-        .call()
-        .map_err(|e| format!("request to plantuml.com failed: {e}"))?;
+    let response = match agent.get(&url).call() {
+        Ok(response) => response,
+        // 400 means plantuml.com parsed the request and rejected the diagram,
+        // which almost always means a syntax problem. Showing the encoded URL
+        // (ureq's default Display) would bury that.
+        Err(ureq::Error::Status(400, _)) => {
+            return Err(
+                "plantuml.com rejected the diagram (HTTP 400) — usually a syntax error".to_string(),
+            );
+        }
+        Err(ureq::Error::Status(code, _)) => {
+            return Err(format!("plantuml.com returned HTTP {code}"));
+        }
+        Err(e) => return Err(format!("could not reach plantuml.com: {e}")),
+    };
 
     let body = response
         .into_string()
@@ -736,7 +833,7 @@ pub fn mermaid_file(path: proc_macro::TokenStream) -> proc_macro::TokenStream {
         let output = match fs::read_to_string(&path) {
             Ok(data) => save_mermaid(&data),
             Err(e) => {
-                println!("warning: rsdoc could not read {path}: {e}");
+                report("mermaid", &format!("could not read the file: {e}"), &path);
                 String::new()
             }
         };
@@ -837,7 +934,7 @@ fn transform_doc_lines(lines: &[String]) -> String {
                     out.push(html);
                 }
                 Err(e) => {
-                    println!("warning: rsdoc {e}");
+                    report(kind, &e, &path);
                     out.push(line);
                 }
             }
@@ -891,7 +988,7 @@ fn transform_doc_lines(lines: &[String]) -> String {
                     .find(|l| !l.is_empty())
                     .unwrap_or("");
                 if path.is_empty() {
-                    println!("warning: rsdoc found an empty `{lang}` block; expected a path");
+                    report(&lang, "empty block, expected a single path", "(empty)");
                     String::new()
                 } else {
                     save_image(path)
@@ -1041,5 +1138,47 @@ mod tests {
         assert_eq!(parse_include("include_mmd!(no_quotes)"), None);
         assert_eq!(parse_include(r#"include_mmd!("a.mmd") trailing"#), None);
         assert_eq!(parse_include("ordinary prose"), None);
+    }
+
+    #[test]
+    fn escapes_for_json() {
+        assert_eq!(json_escape("plain"), "plain");
+        assert_eq!(json_escape(r#"a"b"#), r#"a\"b"#);
+        assert_eq!(json_escape("line\nbreak"), r"line\nbreak");
+        assert_eq!(json_escape(r"back\slash"), r"back\\slash");
+        assert_eq!(json_escape("\u{1}"), r"\u0001");
+    }
+
+    #[test]
+    fn picks_the_useful_plantuml_error_line() {
+        let stderr = "\n\n     \nError line 3 in file: Syntax Error?\n\
+                      Some diagram description contains errors\n\n";
+        let msg = summarize_plantuml_error(stderr).expect("expected a summary");
+        assert!(msg.contains("Error line 3"), "got: {msg}");
+        assert!(!msg.starts_with('\n'));
+        assert!(
+            !msg.contains("Some diagram"),
+            "noise should be trimmed: {msg}"
+        );
+    }
+
+    #[test]
+    fn combines_the_four_line_pipe_diagnostic() {
+        // This is the exact shape PlantUML 1.2024.7 prints in -pipe mode.
+        let stderr = "ERROR\n2\nSyntax Error?\nSome diagram description contains errors\n";
+        assert_eq!(
+            summarize_plantuml_error(stderr).as_deref(),
+            Some("syntax error at line 2: Syntax Error?")
+        );
+    }
+
+    #[test]
+    fn falls_back_to_the_first_line_when_nothing_looks_like_an_error() {
+        let stderr = "\n\nsomething unexpected happened\n";
+        assert_eq!(
+            summarize_plantuml_error(stderr).as_deref(),
+            Some("something unexpected happened")
+        );
+        assert_eq!(summarize_plantuml_error("\n  \n"), None);
     }
 }
