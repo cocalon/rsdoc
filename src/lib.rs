@@ -476,7 +476,8 @@ pub fn plantuml_file(img: proc_macro::TokenStream) -> proc_macro::TokenStream {
     })
 }
 
-/// Directory holding rendered output, keyed by a hash of the diagram source.
+/// Directory holding rendered output, keyed by the diagram source and the
+/// renderer that produced it.
 ///
 /// Rendering costs a network round-trip (or a JVM start), and `#[doc = ...]`
 /// expands during every build — not only during `cargo doc`. Caching the result
@@ -489,32 +490,129 @@ fn cache_dir() -> std::path::PathBuf {
         .unwrap_or_else(|| std::path::PathBuf::from("./rsdoc-cache"))
 }
 
-/// Locate a local `plantuml.jar`.
+/// Where a diagram's SVG comes from.
+///
+/// The variant carries enough identity to key the cache: a different jar
+/// produces a different picture from the same source, so a cache keyed on the
+/// source alone would keep serving the old rendering after an upgrade.
+enum Renderer {
+    /// A local jar, fingerprinted by path, size and modification time.
+    Local {
+        jar: std::path::PathBuf,
+        fingerprint: String,
+    },
+    /// plantuml.com — or nothing at all, when `RSDOC_PLANTUML_OFFLINE` is set.
+    Remote,
+}
+
+fn resolve_renderer() -> Renderer {
+    match find_plantuml_jar() {
+        Some((jar, fingerprint)) => Renderer::Local { jar, fingerprint },
+        None => Renderer::Remote,
+    }
+}
+
+fn sha1_hex(text: &str) -> String {
+    let mut hasher = Sha1::new();
+    hasher.input_str(text);
+    hasher.result_str()
+}
+
+/// Cache key for one diagram rendered one way.
+///
+/// `Remote` keeps the bare source hash — the key 0.4.0–0.4.2 wrote — so
+/// upgrading does not throw away caches that are still correct. A local jar
+/// mixes its fingerprint in, which is what makes replacing the jar re-render
+/// instead of showing the previous picture.
+fn cache_key(uml_str: &str, renderer: &Renderer) -> String {
+    let source_hash = sha1_hex(uml_str);
+
+    match renderer {
+        Renderer::Remote => source_hash,
+        Renderer::Local { fingerprint, .. } => {
+            let mut hasher = Sha1::new();
+            // The source hash is fixed width, so the pair cannot be confused
+            // with a different source/fingerprint split.
+            hasher.input_str(&source_hash);
+            hasher.input_str(fingerprint);
+            hasher.result_str()
+        }
+    }
+}
+
+/// Identify a jar well enough to notice that it was replaced.
+///
+/// Path, size and modification time: an upgrade rewrites the file, and even a
+/// rebuild that keeps the size moves the mtime, so both are covered.
+fn jar_fingerprint(path: &std::path::Path) -> String {
+    let (len, mtime) = match fs::metadata(path) {
+        Ok(meta) => {
+            let mtime = meta
+                .modified()
+                .ok()
+                .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
+                .map(|delta| delta.as_nanos())
+                .unwrap_or(0);
+            (meta.len(), mtime)
+        }
+        Err(_) => (0, 0),
+    };
+
+    format!("{}:{len}:{mtime}", path.display())
+}
+
+/// Whether diagrams must never leave the machine.
+///
+/// `RSDOC_PLANTUML_OFFLINE=1` turns a missing or broken jar into a reported
+/// failure instead of a silent round-trip to plantuml.com. For an air-gapped or
+/// confidential build that round-trip is exactly what the jar was meant to
+/// prevent, so it must not happen behind a warning.
+fn offline_enabled() -> bool {
+    match std::env::var("RSDOC_PLANTUML_OFFLINE") {
+        Ok(value) => !matches!(
+            value.trim().to_ascii_lowercase().as_str(),
+            "" | "0" | "false" | "no"
+        ),
+        Err(_) => false,
+    }
+}
+
+/// Locate a local `plantuml.jar` and fingerprint it for the cache key.
 ///
 /// Checked in order:
 ///   1. the `RSDOC_PLANTUML_JAR` environment variable
 ///   2. `plantuml.jar` next to the crate's `Cargo.toml`
+///   3. `plantuml.jar` in an enclosing crate or workspace root, so a workspace
+///      with several members needs one copy rather than one per member
 ///
 /// Rendering locally removes the network dependency entirely, which is what
 /// issue #5 asks for. Falls back to plantuml.com when no jar is found.
-fn find_plantuml_jar() -> Option<std::path::PathBuf> {
-    use std::path::PathBuf;
+fn find_plantuml_jar() -> Option<(std::path::PathBuf, String)> {
+    use std::path::{Path, PathBuf};
 
-    if let Ok(p) = std::env::var("RSDOC_PLANTUML_JAR") {
-        let p = PathBuf::from(p);
-        if p.is_file() {
-            return Some(p);
+    if let Ok(value) = std::env::var("RSDOC_PLANTUML_JAR") {
+        let path = PathBuf::from(value.trim());
+        if path.is_file() {
+            return Some((path.clone(), jar_fingerprint(&path)));
         }
     }
 
-    if let Ok(manifest) = std::env::var("CARGO_MANIFEST_DIR") {
-        let p = PathBuf::from(manifest).join("plantuml.jar");
-        if p.is_file() {
-            return Some(p);
+    let manifest = PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").ok()?);
+    let mut dir: &Path = &manifest;
+
+    loop {
+        let candidate = dir.join("plantuml.jar");
+        if candidate.is_file() {
+            return Some((candidate.clone(), jar_fingerprint(&candidate)));
+        }
+
+        // Walking up stops as soon as a directory has no `Cargo.toml`, so an
+        // unrelated jar somewhere higher up the disk is never picked up.
+        match dir.parent() {
+            Some(parent) if parent.join("Cargo.toml").is_file() => dir = parent,
+            _ => return None,
         }
     }
-
-    None
 }
 
 /// Render through a local `plantuml.jar` using its `-pipe` mode, which reads the
@@ -616,6 +714,16 @@ fn json_escape(s: &str) -> String {
 /// CI scripts and AI agents parse the failure instead of scraping prose. Without
 /// it, this is an ordinary warning aimed at a human.
 fn report(kind: &str, message: &str, preview: &str) {
+    report_at("warning", kind, message, preview);
+}
+
+/// Report a condition the build should not quietly tolerate — a diagram that
+/// was dropped because rendering it would have left the machine.
+fn report_hard(kind: &str, message: &str, preview: &str) {
+    report_at("error", kind, message, preview);
+}
+
+fn report_at(prose_level: &str, kind: &str, message: &str, preview: &str) {
     if std::env::var_os("RSDOC_JSON").is_some() {
         println!(
             r#"{{"tool":"rsdoc","level":"error","kind":"{}","message":"{}","preview":"{}"}}"#,
@@ -624,7 +732,7 @@ fn report(kind: &str, message: &str, preview: &str) {
             json_escape(preview)
         );
     } else {
-        println!("warning: rsdoc failed on `{preview}` ({kind}): {message}");
+        println!("{prose_level}: rsdoc failed on `{preview}` ({kind}): {message}");
     }
 }
 
@@ -668,8 +776,38 @@ fn summarize_plantuml_error(stderr: &str) -> Option<String> {
     lines.first().map(|line| (*line).to_string())
 }
 
-fn render_svg_cached(hash: &str, uml_str: &str) -> String {
-    let cache = cache_dir().join(format!("{hash}.svg"));
+/// Why nothing was rendered in offline mode.
+fn offline_refusal() -> String {
+    match std::env::var("RSDOC_PLANTUML_JAR") {
+        Ok(value) if !value.trim().is_empty() => format!(
+            "RSDOC_PLANTUML_JAR points at `{}`, which is not a readable file, and \
+             RSDOC_PLANTUML_OFFLINE is set — the diagram was not sent to plantuml.com",
+            value.trim()
+        ),
+        _ => "no local plantuml.jar was found (`RSDOC_PLANTUML_JAR`, next to `Cargo.toml`, \
+              or in the workspace root) and RSDOC_PLANTUML_OFFLINE is set — the diagram was \
+              not sent to plantuml.com"
+            .to_string(),
+    }
+}
+
+/// Mention which jar failed, unless Java's own message already names it.
+///
+/// A corrupt jar makes the JVM print the whole path, and repeating it reads like
+/// a stutter; a missing `java` on `PATH` says nothing about the jar, so there the
+/// path is the only clue.
+fn jar_note(reason: &str, jar: &std::path::Path) -> String {
+    let path = jar.display().to_string();
+
+    if reason.contains(&path) {
+        String::new()
+    } else {
+        format!(" (jar: {path})")
+    }
+}
+
+fn render_svg_cached(key: &str, uml_str: &str, renderer: &Renderer) -> String {
+    let cache = cache_dir().join(format!("{key}.svg"));
 
     if let Ok(cached) = fs::read_to_string(&cache) {
         if cached.contains("<svg") {
@@ -677,68 +815,104 @@ fn render_svg_cached(hash: &str, uml_str: &str) -> String {
         }
     }
 
-    let svg = match find_plantuml_jar() {
-        Some(jar) => match render_with_jar(&jar, uml_str) {
+    // Where to store the result. It stays under `key` unless the jar was
+    // expected to answer and did not: a network fallback stored under the jar's
+    // key would outlive the broken jar, so installing a JRE afterwards would
+    // still serve the old picture — and suppress the warning that explains why.
+    let mut fallback_key: Option<String> = None;
+
+    let svg = match renderer {
+        Renderer::Local { jar, .. } => match render_with_jar(jar, uml_str) {
             Ok(svg) => svg,
             Err(reason) => {
-                // The jar failed, but the diagram may still render remotely.
-                report(
-                    "plantuml",
-                    &format!(
-                        "{reason} (jar: {}), falling back to plantuml.com",
-                        jar.display()
-                    ),
-                    &preview(uml_str),
-                );
+                if offline_enabled() {
+                    report_hard(
+                        "plantuml",
+                        &format!(
+                            "{reason}{}; RSDOC_PLANTUML_OFFLINE is set, so the diagram was not \
+                             sent to plantuml.com",
+                            jar_note(&reason, jar)
+                        ),
+                        &preview(uml_str),
+                    );
+                    String::new()
+                } else {
+                    // The jar failed, but the diagram may still render remotely.
+                    report(
+                        "plantuml",
+                        &format!(
+                            "{reason}{}, falling back to plantuml.com",
+                            jar_note(&reason, jar)
+                        ),
+                        &preview(uml_str),
+                    );
+                    fallback_key = Some(cache_key(uml_str, &Renderer::Remote));
+                    download_puml_svg(uml_str).unwrap_or_else(|e| {
+                        report("plantuml", &e, &preview(uml_str));
+                        String::new()
+                    })
+                }
+            }
+        },
+        Renderer::Remote => {
+            if offline_enabled() {
+                report_hard("plantuml", &offline_refusal(), &preview(uml_str));
+                String::new()
+            } else {
                 download_puml_svg(uml_str).unwrap_or_else(|e| {
-                    report("plantuml", &e, &preview(uml_str));
+                    // Only suggest the jar when the network is the problem. On a syntax
+                    // error it would send the reader down the wrong path.
+                    let hint = if e.contains("syntax") || e.contains("400") {
+                        ""
+                    } else {
+                        " (a local plantuml.jar via RSDOC_PLANTUML_JAR avoids the network)"
+                    };
+                    report("plantuml", &format!("{e}{hint}"), &preview(uml_str));
                     String::new()
                 })
             }
-        },
-        None => download_puml_svg(uml_str).unwrap_or_else(|e| {
-            // Only suggest the jar when the network is the problem. On a syntax
-            // error it would send the reader down the wrong path.
-            let hint = if e.contains("syntax") || e.contains("400") {
-                ""
-            } else {
-                " (a local plantuml.jar via RSDOC_PLANTUML_JAR avoids the network)"
-            };
-            report("plantuml", &format!("{e}{hint}"), &preview(uml_str));
-            String::new()
-        }),
+        }
     };
 
+    let store_under = fallback_key.as_deref().unwrap_or(key);
+
     if svg.contains("<svg") {
-        let _ = fs::create_dir_all(cache_dir());
-        let _ = fs::write(&cache, &svg);
+        let dir = cache_dir();
+        let _ = fs::create_dir_all(&dir);
+        let _ = fs::write(dir.join(format!("{store_under}.svg")), &svg);
     }
 
     svg
 }
 
 fn save_plantuml(uml_str: &str) -> String {
-    let mut output = String::new();
-
-    let mut hasher = Sha1::new();
-
-    hasher.input_str(uml_str);
-
-    let hash = hasher.result_str();
-    let puml_dir = doc_dir().join("images").join("puml_files");
-    let _ = fs::create_dir_all(&puml_dir);
-    let uml_file = puml_dir.join(format!("{hash}.png"));
-    let uml_file_str = uml_file.to_string_lossy().to_string();
-
-    let svg = render_svg_cached(&hash, uml_str);
+    let source_hash = sha1_hex(uml_str);
+    let renderer = resolve_renderer();
+    let svg = render_svg_cached(&cache_key(uml_str, &renderer), uml_str, &renderer);
 
     if !svg.is_empty() {
-        output.push_str(&("<p><div>".to_string() + svg.as_str() + "</div></p>"));
-    } else if save_http_png::download_puml(uml_str, &uml_file_str) {
+        return format!("<p><div>{svg}</div></p>");
+    }
+
+    // Nothing rendered. The historical last resort downloads a PNG from
+    // plantuml.com, which is the one thing `RSDOC_PLANTUML_OFFLINE` exists to
+    // prevent — `render_svg_cached` has already reported why.
+    if offline_enabled() {
+        return String::new();
+    }
+
+    let puml_dir = doc_dir().join("images").join("puml_files");
+    let _ = fs::create_dir_all(&puml_dir);
+    let uml_file = puml_dir.join(format!("{source_hash}.png"));
+    let uml_file_str = uml_file.to_string_lossy().to_string();
+
+    let mut output = String::new();
+
+    if save_http_png::download_puml(uml_str, &uml_file_str) {
         // The page depth varies with the module nesting level, so the relative
         // path cannot be baked in here; the bootstrap resolves it at runtime.
         output.push_str(&format!(
-            "<p><img data-rsdoc-src=\"images/puml_files/{hash}.png\" alt=\"plantuml\"/></p>\n\n{ASSET_BOOTSTRAP}"
+            "<p><img data-rsdoc-src=\"images/puml_files/{source_hash}.png\" alt=\"plantuml\"/></p>\n\n{ASSET_BOOTSTRAP}"
         ));
     } else {
         println!("warning: failed to download the plantuml picture, use dynamic hyperlink instead");
@@ -1673,5 +1847,244 @@ mod tests {
         let (lang, attrs, _) = split_fence("graph TD", "~~~");
         assert_eq!(lang, "graph");
         assert_eq!(attrs, "TD");
+    }
+
+    // ---- local plantuml.jar -------------------------------------------------
+
+    use std::sync::Mutex;
+
+    /// Environment variables are process-wide while `cargo test` runs tests on
+    /// threads, so everything that sets one takes this lock. Every value is
+    /// restored on drop, so a failure cannot leak into the next test.
+    static ENV: Mutex<()> = Mutex::new(());
+
+    fn env_lock() -> std::sync::MutexGuard<'static, ()> {
+        ENV.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    struct Env {
+        key: &'static str,
+        previous: Option<std::ffi::OsString>,
+    }
+
+    impl Env {
+        fn set(key: &'static str, value: impl AsRef<std::ffi::OsStr>) -> Self {
+            let previous = std::env::var_os(key);
+            std::env::set_var(key, value);
+            Env { key, previous }
+        }
+
+        fn unset(key: &'static str) -> Self {
+            let previous = std::env::var_os(key);
+            std::env::remove_var(key);
+            Env { key, previous }
+        }
+    }
+
+    impl Drop for Env {
+        fn drop(&mut self) {
+            match self.previous.take() {
+                Some(value) => std::env::set_var(self.key, value),
+                None => std::env::remove_var(self.key),
+            }
+        }
+    }
+
+    fn scratch(name: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join("rsdoc-unit").join(name);
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).expect("create scratch dir");
+        dir
+    }
+
+    /// A jar-shaped file. Nothing reads its content until a JVM does.
+    fn fake_jar(dir: &std::path::Path, bytes: usize) -> std::path::PathBuf {
+        let jar = dir.join("plantuml.jar");
+        fs::write(&jar, vec![0u8; bytes]).expect("write fake jar");
+        jar
+    }
+
+    fn local_renderer(jar: &std::path::Path) -> Renderer {
+        Renderer::Local {
+            jar: jar.to_path_buf(),
+            fingerprint: jar_fingerprint(jar),
+        }
+    }
+
+    const DIAGRAM: &str = "@startuml\nBob -> Alice : hello\n@enduml";
+
+    #[test]
+    fn a_local_jar_gets_its_own_cache_entry() {
+        let dir = scratch("cache-key");
+        let jar = fake_jar(&dir, 64);
+
+        let remote = cache_key(DIAGRAM, &Renderer::Remote);
+        let local = cache_key(DIAGRAM, &local_renderer(&jar));
+
+        // The network key stays exactly what 0.4.x wrote, so upgrading does not
+        // throw those caches away.
+        assert_eq!(remote, sha1_hex(DIAGRAM));
+        assert_ne!(
+            local, remote,
+            "a jar must not share the network's cache entry"
+        );
+        // The same jar keeps hitting the same entry.
+        assert_eq!(local, cache_key(DIAGRAM, &local_renderer(&jar)));
+    }
+
+    #[test]
+    fn a_replaced_jar_invalidates_the_cache_entry() {
+        let dir = scratch("cache-key-replaced");
+        let jar = fake_jar(&dir, 64);
+
+        let before = cache_key(DIAGRAM, &local_renderer(&jar));
+        // A different size guarantees a different fingerprint even on a
+        // filesystem with one-second mtime granularity.
+        fs::write(&jar, vec![1u8; 65]).expect("replace jar");
+
+        assert_ne!(
+            before,
+            cache_key(DIAGRAM, &local_renderer(&jar)),
+            "an upgraded jar reused the previous rendering"
+        );
+    }
+
+    #[test]
+    fn finds_the_jar_through_the_environment_variable() {
+        let _guard = env_lock();
+        let dir = scratch("discover-env");
+        let jar = fake_jar(&dir, 32);
+        let _jar_env = Env::set("RSDOC_PLANTUML_JAR", &jar);
+
+        let (found, fingerprint) = find_plantuml_jar().expect("jar from the env var");
+        assert_eq!(found, jar);
+        assert!(fingerprint.starts_with(&jar.display().to_string()));
+
+        // A path that does not exist is not taken at face value.
+        let _missing_env = Env::set("RSDOC_PLANTUML_JAR", dir.join("missing.jar"));
+        assert_ne!(
+            find_plantuml_jar().map(|(path, _)| path),
+            Some(jar),
+            "a missing jar was reported as found"
+        );
+    }
+
+    #[test]
+    fn finds_the_jar_in_a_workspace_root() {
+        let _guard = env_lock();
+        let root = scratch("discover-workspace");
+        let member = root.join("member");
+        fs::create_dir_all(&member).expect("create member");
+        fs::write(root.join("Cargo.toml"), "[workspace]\n").expect("workspace manifest");
+        fs::write(member.join("Cargo.toml"), "[package]\nname = \"m\"\n").expect("member manifest");
+        let jar = fake_jar(&root, 48);
+
+        let _unset = Env::unset("RSDOC_PLANTUML_JAR");
+        let _manifest = Env::set("CARGO_MANIFEST_DIR", &member);
+
+        assert_eq!(find_plantuml_jar().map(|(path, _)| path), Some(jar));
+
+        // With no `Cargo.toml` above the member the walk stops, so an unrelated
+        // jar further up the disk is never picked up.
+        fs::remove_file(root.join("Cargo.toml")).expect("remove workspace manifest");
+        assert_eq!(find_plantuml_jar().map(|(path, _)| path), None);
+    }
+
+    #[test]
+    fn offline_refuses_to_post_the_diagram() {
+        let _guard = env_lock();
+        let dir = scratch("offline");
+
+        let _offline = Env::set("RSDOC_PLANTUML_OFFLINE", "1");
+        // No jar anywhere: the env var points at a directory, and the manifest
+        // root below holds no `plantuml.jar` either.
+        let _jar = Env::set("RSDOC_PLANTUML_JAR", &dir);
+        let _manifest = Env::set("CARGO_MANIFEST_DIR", &dir);
+        let _target = Env::set("CARGO_TARGET_DIR", dir.join("target"));
+
+        let renderer = resolve_renderer();
+        assert!(
+            matches!(&renderer, Renderer::Remote),
+            "a jar was found anyway"
+        );
+
+        let key = cache_key(DIAGRAM, &renderer);
+        assert!(
+            render_svg_cached(&key, DIAGRAM, &renderer).is_empty(),
+            "offline mode still produced a diagram, so it reached the network"
+        );
+    }
+
+    /// Number of times the stand-in `java` was started.
+    #[cfg(unix)]
+    fn java_calls(counter: &std::path::Path) -> usize {
+        fs::read_to_string(counter)
+            .map(|text| text.lines().count())
+            .unwrap_or(0)
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_local_jar_renders_through_java_and_is_cached() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let _guard = env_lock();
+        let dir = scratch("render");
+        let bin = dir.join("bin");
+        fs::create_dir_all(&bin).expect("create bin");
+        let counter = dir.join("calls");
+
+        // Stand-in for `java -jar plantuml.jar -tsvg -pipe`: drain stdin, count
+        // the call, emit an SVG. Shell builtins only, because `PATH` below holds
+        // nothing else.
+        let shim = bin.join("java");
+        fs::write(
+            &shim,
+            format!(
+                "#!/bin/sh\nwhile read -r line; do :; done\n\
+                 echo run >> '{}'\nprintf '<svg>local</svg>'\n",
+                counter.display()
+            ),
+        )
+        .expect("write shim");
+        fs::set_permissions(&shim, fs::Permissions::from_mode(0o755)).expect("chmod shim");
+
+        let jar = fake_jar(&dir, 128);
+        let _jar_env = Env::set("RSDOC_PLANTUML_JAR", &jar);
+        let _offline = Env::unset("RSDOC_PLANTUML_OFFLINE");
+        let _target = Env::set("CARGO_TARGET_DIR", dir.join("target"));
+        // The shim is the only `java` reachable, so a real JVM cannot answer.
+        let _path = Env::set("PATH", &bin);
+
+        let renderer = resolve_renderer();
+        assert!(
+            matches!(&renderer, Renderer::Local { .. }),
+            "the jar was not discovered"
+        );
+
+        let key = cache_key(DIAGRAM, &renderer);
+        assert!(render_svg_cached(&key, DIAGRAM, &renderer).contains("<svg>local</svg>"));
+        assert_eq!(java_calls(&counter), 1, "the jar was never started");
+
+        // Same source and same jar: the cached SVG answers, the JVM stays idle.
+        assert!(render_svg_cached(&key, DIAGRAM, &renderer).contains("<svg>local</svg>"));
+        assert_eq!(
+            java_calls(&counter),
+            1,
+            "the cache did not prevent a second JVM start"
+        );
+
+        // A newer jar may draw the same diagram differently, so it re-renders.
+        fs::write(&jar, vec![9u8; 129]).expect("replace jar");
+        let upgraded = resolve_renderer();
+        assert!(
+            render_svg_cached(&cache_key(DIAGRAM, &upgraded), DIAGRAM, &upgraded)
+                .contains("<svg>local</svg>")
+        );
+        assert_eq!(
+            java_calls(&counter),
+            2,
+            "an upgraded jar reused the cached SVG"
+        );
     }
 }

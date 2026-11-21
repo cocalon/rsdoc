@@ -1,6 +1,6 @@
 [package]
 name = "rsdoc"
-version = "0.4.2"
+version = "0.4.3"
 authors = ["cocalon <cocalon@163.com>"]
 edition = "2021"
 license = "MIT OR Apache-2.0"

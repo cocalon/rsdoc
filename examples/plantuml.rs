@@ -1,9 +1,10 @@
 //! PlantUML diagrams.
 //!
 //! Rendering needs either a local `plantuml.jar` — found through the
-//! `RSDOC_PLANTUML_JAR` environment variable or next to `Cargo.toml` — or network
-//! access to `plantuml.com`. Results are cached under `target/rsdoc-cache/`, so a
-//! rebuild reads the cache instead of asking again.
+//! `RSDOC_PLANTUML_JAR` environment variable, next to `Cargo.toml`, or in the
+//! workspace root — or network access to `plantuml.com`. Results are cached under
+//! `target/rsdoc-cache/` and keyed on the jar, so a rebuild reads the cache
+//! instead of asking again. Set `RSDOC_PLANTUML_OFFLINE=1` to forbid the network.
 //!
 //! ```sh
 //! cargo doc --example plantuml --open

@@ -119,7 +119,9 @@ no stylesheet is needed. Backticks become `<code>`; other HTML is escaped.
   balanced brackets and quotes, and `subgraph`/`end` pairing. Other syntax errors
   do not fail the build — the browser draws an error box instead.
 - PlantUML needs either a local `plantuml.jar` (via `RSDOC_PLANTUML_JAR`, or placed
-  next to `Cargo.toml`) or network access to plantuml.com.
+  next to `Cargo.toml`, or in the workspace root) or network access to
+  plantuml.com. `RSDOC_PLANTUML_OFFLINE=1` forbids the network outright: a missing
+  or broken jar becomes an error and the diagram is dropped.
 - Mermaid needs nothing at runtime: `mermaid.js` is bundled in the crate and
   copied into the documentation root during the build.
 
@@ -131,8 +133,10 @@ Set `RSDOC_JSON=1` for one JSON object per line:
 {"tool":"rsdoc","level":"error","kind":"mermaid","message":"unrecognised diagram type `grap`, did you mean `graph`?","preview":"grap TD A --> B"}
 ```
 
-Without it, warnings read
-`warning: rsdoc failed on `<source excerpt>` (<kind>): <reason>`.
+Without it, diagnostics read
+`warning: rsdoc failed on `<source excerpt>` (<kind>): <reason>`. A diagram
+dropped because `RSDOC_PLANTUML_OFFLINE` forbids the network is reported as
+`error:` instead, since the build did not produce what was asked for.
 
 Every diagnostic quotes the diagram it refers to, because a `#[doc]` expansion
 carries no usable source location on stable Rust.

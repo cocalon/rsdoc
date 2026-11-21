@@ -7,6 +7,35 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+## [0.4.3] - 2026-11-21
+
+### Added
+
+- **`RSDOC_PLANTUML_OFFLINE=1` keeps diagrams on the machine.** A missing or
+  broken `plantuml.jar` is reported as an error instead of falling back to
+  plantuml.com — including the last-resort PNG download, which used to run
+  whenever every other path had failed. For an air-gapped or confidential build
+  the round-trip is the one thing the jar exists to prevent, so it cannot happen
+  behind a warning.
+- `plantuml.jar` is also found in the workspace root, so a workspace with several
+  member crates needs one copy instead of one per member. The search walks up only
+  while each directory still has a `Cargo.toml`.
+
+### Fixed
+
+- **A replaced `plantuml.jar` kept serving the previous rendering.** The cache key
+  was the source hash alone, so upgrading PlantUML — or pointing
+  `RSDOC_PLANTUML_JAR` at a different jar — hit the old entry and looked like the
+  jar was being ignored. The key now mixes in the jar's path, size and mtime.
+  Network renders keep the key they had in 0.4.x, so those caches still work;
+  a local rendering made before this change is rendered once more.
+- **A failed local render was cached under the jar's key.** Installing a JRE
+  afterwards still served the network picture and suppressed the warning that
+  explained why. A fallback render is now cached under the network key, so the
+  next build tries the jar again.
+- A corrupt jar no longer repeats its own path in the warning when the JVM has
+  already printed it.
+
 ## [0.4.2] - 2026-11-14
 
 ### Added
