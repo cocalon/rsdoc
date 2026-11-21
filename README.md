@@ -148,10 +148,18 @@ pub fn test_function() {}
 ```
 
 By default these render through `plantuml.com`, so they need network access at
-build time. To render locally, put a `plantuml.jar` next to `Cargo.toml` or point
-`RSDOC_PLANTUML_JAR` at one — rsdoc then runs `java -jar plantuml.jar -tsvg
--pipe` and nothing leaves the machine. Rendered output is cached, so a rebuild
-does not start the JVM again for a diagram that has not changed.
+build time. To render locally, put a `plantuml.jar` next to `Cargo.toml`, in the
+workspace root, or point `RSDOC_PLANTUML_JAR` at one — rsdoc then runs
+`java -jar plantuml.jar -tsvg -pipe` and nothing leaves the machine. Rendered
+output is cached, so a rebuild does not start the JVM again for a diagram that
+has not changed; the cache is keyed on the jar as well, so replacing or upgrading
+it re-renders instead of showing the previous picture.
+
+If the jar is missing or `java` cannot start, rsdoc warns and falls back to
+plantuml.com. Set `RSDOC_PLANTUML_OFFLINE=1` to make that a failure instead: the
+diagram is dropped with an error and no request is made. That is the setting for
+an air-gapped or confidential build, where the round-trip is the very thing the
+jar was meant to avoid.
 
 <img src="https://raw.githubusercontent.com/cocalon/rsdoc/main/images/preview-plantuml.png"
    alt="A PlantUML sequence diagram rendered inline in rustdoc" style="max-width:100%">
